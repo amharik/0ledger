@@ -14,13 +14,14 @@ Updated: 2026-11-06
 
 ## M1A — Ledger core (current)
 
-- [~] Integer money + currency + round-off engine
-- [~] IDs, slugs, naming (`workspace / account / readable`)
-- [~] Zod domain model: company, ledger, party, item, voucher, lines, allocations
-- [~] Dexie schema v1 + repositories
-- [~] Voucher numbering (auto + editable, FY reset)
-- [~] Double-entry validation + balance assertion
-- [~] Tally readiness validator
+- [x] Integer money + currency + round-off engine
+- [x] IDs, slugs, naming (`workspace / account / readable`)
+- [x] Zod domain model: company, ledger, party, item, voucher, lines, allocations
+- [x] Dexie schema v1 + repositories
+- [x] Voucher numbering (auto + editable, FY reset)
+- [x] Double-entry validation + balance assertion
+- [x] Tally readiness validator
+- [x] Unit tests: money, IDs/FY, numbering, round-off, validation, workspace/posting/reports
 - [ ] Manual entry UI (accounts, vouchers, review)
 - [ ] Encrypted backup / restore
 - [ ] Workbook template spec renderer (xlsx + Sheets)
