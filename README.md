@@ -4,7 +4,7 @@ Local-first, double-entry bookkeeping for Indian businesses — in a browser ext
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel) and FASTag statements, turns it into a Tally-compatible ledger, and helps you reconcile it. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
-> Status: early development. Phase 1A (ledger core) is in progress. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: early development. Ledger core and encrypted backups are working. Manual entry UI is next. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
 
@@ -71,6 +71,7 @@ src/
     db/             Dexie schema and repositories
     numbering/      voucher numbering schemes
     ledger/         validation, Tally readiness, reports
+    backup/         encrypted AES-GCM backup and restore
     template/       single workbook template spec (xlsx + Sheets)
     parsers/        email + statement adapters (planned)
     sync/           Drive folder + Sheets mirror (planned)
