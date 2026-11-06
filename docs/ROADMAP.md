@@ -23,7 +23,10 @@ Updated: 2026-11-06
 - [x] Tally readiness validator
 - [x] Unit tests: money, IDs/FY, numbering, round-off, validation, workspace/posting/reports
 - [x] Encrypted backup / restore (AES-256-GCM + PBKDF2, replace/merge)
-- [ ] Manual entry UI (accounts, vouchers, review)
+- [x] Manual voucher entry UI (Payment / Receipt / Contra / Journal)
+- [x] Workspace + company settings UI, encrypted backup UI
+- [ ] Ledger / account editor
+- [ ] Voucher review, edit, cancel, and delete UI
 - [ ] Workbook template spec renderer (xlsx + Sheets)
 
 ## M1B — Invoicing & reports
