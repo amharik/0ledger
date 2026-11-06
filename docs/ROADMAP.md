@@ -27,7 +27,7 @@ Updated: 2026-11-06
 - [x] Workspace + company settings UI, encrypted backup UI
 - [x] Ledger / account editor (add, rename via service, opening balances, archive/delete)
 - [ ] Voucher review, edit, cancel, and delete UI
-- [ ] Workbook template spec renderer (xlsx + Sheets)
+- [x] Workbook template spec renderer (xlsx + Sheets)
 
 ## M1B — Invoicing & reports
 
