@@ -26,7 +26,7 @@ Updated: 2026-11-06
 - [x] Manual voucher entry UI (Payment / Receipt / Contra / Journal)
 - [x] Workspace + company settings UI, encrypted backup UI
 - [x] Ledger / account editor (add, rename via service, opening balances, archive/delete)
-- [ ] Voucher review, edit, cancel, and delete UI
+- [x] Voucher review, edit, cancel, and delete UI (manual types; allocated invoices read-only)
 - [x] Workbook template spec renderer (xlsx + Sheets)
 
 ## M1B — Invoicing & reports

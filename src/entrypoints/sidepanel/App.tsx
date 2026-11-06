@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { getDb } from '@/core/db/db';
-import { postVoucher } from '@/core/ledger/post-voucher';
+import { getPostedVoucher, postVoucher, type PostedVoucher } from '@/core/ledger';
 import { trialBalance, type TrialBalance } from '@/core/ledger/reports';
 import { formatMinor, parseAmountToMinor } from '@/core/money/money';
 import type { Ledger, Voucher, VoucherType } from '@/core/model';
 import { useWorkspace } from '@/ui/workspace';
+import { VoucherReview } from '@/ui/VoucherReview';
 
 type Side = 'debit' | 'credit';
 
@@ -57,6 +58,8 @@ export default function App() {
   const [tb, setTb] = useState<TrialBalance>();
   const [recent, setRecent] = useState<Voucher[]>([]);
   const [voucherCount, setVoucherCount] = useState(0);
+  const [selectedId, setSelectedId] = useState<string>();
+  const [selected, setSelected] = useState<PostedVoucher>();
 
   const workspaceId = bundle?.workspace.id;
   const ledgerList = bundle?.ledgers ?? [];
@@ -93,6 +96,30 @@ export default function App() {
       cancelled = true;
     };
   }, [workspaceId, refreshToken]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setSelected(undefined);
+      return;
+    }
+    let cancelled = false;
+    void getPostedVoucher(getDb(), selectedId)
+      .then((posted) => {
+        if (cancelled) return;
+        if (!posted) {
+          setSelectedId(undefined);
+          setSelected(undefined);
+          return;
+        }
+        setSelected(posted);
+      })
+      .catch((cause) => {
+        if (!cancelled) setFormError(errorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, refreshToken]);
 
   const totals = useMemo(() => {
     let debit = 0;
@@ -373,16 +400,50 @@ export default function App() {
                       <div className="muted small">
                         {voucher.voucherType} · {voucher.date}
                         {voucher.narration ? ` · ${voucher.narration}` : ''}
+                        {voucher.status !== 'regular' ? ` · ${voucher.status}` : ''}
                       </div>
                     </div>
-                    <span className={voucher.status === 'regular' ? 'positive' : 'muted'}>
-                      {formatMinor(voucher.totalDebitMinor)}
-                    </span>
+                    <div className="recent-actions">
+                      <span className={voucher.status === 'regular' ? 'positive' : 'muted'}>
+                        {formatMinor(voucher.totalDebitMinor)}
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setSelectedId(voucher.id)}
+                      >
+                        Review
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
           </section>
+
+          {selected ? (
+            <VoucherReview
+              key={`${selected.voucher.id}:${selected.voucher.updatedAt}`}
+              posted={selected}
+              ledgers={ledgerList}
+              onClose={() => {
+                setSelectedId(undefined);
+                setSelected(undefined);
+              }}
+              onSaved={(message) => {
+                setNotice(message);
+                setFormError(undefined);
+                setRefreshToken((value) => value + 1);
+              }}
+              onDeleted={(message) => {
+                setNotice(message);
+                setFormError(undefined);
+                setSelectedId(undefined);
+                setSelected(undefined);
+                setRefreshToken((value) => value + 1);
+              }}
+            />
+          ) : null}
 
           <section className="card">
             <div className="section-head">

@@ -46,6 +46,28 @@ button.ghost {
   border-color: var(--border);
 }
 
+button.danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 input,
 select,
 textarea {
@@ -241,6 +263,12 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
+.recent-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .list li:last-child {
   padding-bottom: 0;
   border-bottom: 0;
@@ -286,4 +314,16 @@ th {
   .line-row {
     grid-template-columns: minmax(0, 1fr) 56px 92px 30px;
   }
+}
+
+.review-actions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.review-actions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }

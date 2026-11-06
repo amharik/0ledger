@@ -1,15 +1,9 @@
 import { financialYearKey, newId, nowIso } from '../ids';
-import { computeTotals, LedgerValidationError, validateNewVoucherInput } from '../ledger/validation';
+import { LedgerValidationError, validateNewVoucherInput } from '../ledger/validation';
 import { previewNextNumber, validateManualNumber } from '../numbering';
 import {
   AuditEventSchema,
-  BillAllocationSchema,
-  CostCenterAllocationSchema,
-  ItemLineSchema,
   NewVoucherSchema,
-  TaxAllocationSchema,
-  VoucherLineSchema,
-  VoucherSchema,
   type BillAllocation,
   type CostCenterAllocation,
   type ItemLine,
@@ -21,6 +15,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from '../db/db';
+import { buildVoucherChildren, buildVoucherRecord } from './voucher-records';
 
 export interface PostedVoucher {
   voucher: Voucher;
@@ -168,125 +163,8 @@ export async function postVoucher(
 
   const now = nowIso();
   const voucherId = newId('vch');
-  const totals = computeTotals(input.lines);
-  const roundOffAmountMinor = input.roundOffLedgerId
-    ? input.lines
-        .filter((line) => line.ledgerId === input.roundOffLedgerId)
-        .reduce((sum, line) => sum + line.amountMinor, 0)
-    : 0;
-
-  const lines: VoucherLine[] = input.lines.map((line, index) =>
-    VoucherLineSchema.parse(
-      compact({
-        id: newId('vln'),
-        voucherId,
-        workspaceId: input.workspaceId,
-        lineNo: line.lineNo ?? index + 1,
-        ledgerId: line.ledgerId,
-        amountMinor: line.amountMinor,
-        currency: line.currency,
-        forexAmountMinor: line.forexAmountMinor,
-        exchangeRate: line.exchangeRate,
-        narration: line.narration,
-        hsnSac: line.hsnSac,
-        createdAt: now,
-        updatedAt: now,
-      }),
-    ),
-  );
-
-  const lineByNo = new Map(lines.map((line) => [line.lineNo, line]));
-  const items: ItemLine[] = input.items.map((item, index) =>
-    ItemLineSchema.parse(
-      compact({
-        id: newId('iln'),
-        voucherId,
-        workspaceId: input.workspaceId,
-        lineNo: item.lineNo ?? index + 1,
-        stockItemId: item.stockItemId,
-        description: item.description,
-        hsnSac: item.hsnSac,
-        quantity: item.quantity,
-        uom: item.uom,
-        rateMinor: item.rateMinor,
-        amountMinor: item.amountMinor,
-        discountMinor: item.discountMinor,
-        godownId: item.godownId,
-        batchId: item.batchId,
-        direction: item.direction,
-        createdAt: now,
-        updatedAt: now,
-      }),
-    ),
-  );
-
-  const billAllocations: BillAllocation[] = [];
-  const costCenterAllocations: CostCenterAllocation[] = [];
-  const taxAllocations: TaxAllocation[] = [];
-
-  input.lines.forEach((lineInput, index) => {
-    const lineNo = lineInput.lineNo ?? index + 1;
-    const line = lineByNo.get(lineNo);
-    if (!line) throw new Error(`Internal error: line ${lineNo} was not created`);
-
-    for (const allocation of lineInput.billAllocations) {
-      billAllocations.push(
-        BillAllocationSchema.parse(
-          compact({
-            id: newId('bil'),
-            workspaceId: input.workspaceId,
-            voucherId,
-            voucherLineId: line.id,
-            ledgerId: line.ledgerId,
-            billRef: allocation.billRef,
-            billType: allocation.billType,
-            amountMinor: allocation.amountMinor,
-            dueDate: allocation.dueDate,
-            creditDays: allocation.creditDays,
-            createdAt: now,
-            updatedAt: now,
-          }),
-        ),
-      );
-    }
-
-    for (const allocation of lineInput.costCenterAllocations) {
-      costCenterAllocations.push(
-        CostCenterAllocationSchema.parse({
-          id: newId('ccl'),
-          workspaceId: input.workspaceId,
-          voucherId,
-          voucherLineId: line.id,
-          costCenterId: allocation.costCenterId,
-          amountMinor: allocation.amountMinor,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      );
-    }
-
-    for (const allocation of lineInput.taxAllocations) {
-      taxAllocations.push(
-        TaxAllocationSchema.parse(
-          compact({
-            id: newId('tax'),
-            workspaceId: input.workspaceId,
-            voucherId,
-            voucherLineId: line.id,
-            ledgerId: allocation.ledgerId,
-            taxType: allocation.taxType,
-            amountMinor: allocation.amountMinor,
-            taxableValueMinor: allocation.taxableValueMinor,
-            rate: allocation.rate,
-            hsnSac: allocation.hsnSac,
-            tdsSection: allocation.tdsSection,
-            createdAt: now,
-            updatedAt: now,
-          }),
-        ),
-      );
-    }
-  });
+  const { lines, items, billAllocations, costCenterAllocations, taxAllocations } =
+    buildVoucherChildren(input, voucherId, now);
 
   const audit = AuditEventSchema.parse(
     compact({
@@ -315,41 +193,12 @@ export async function postVoucher(
     ],
     async () => {
       const assigned = await assignNumber(db, input, fyStartMonth);
-      const voucher = VoucherSchema.parse(
-        compact({
-          id: voucherId,
-          workspaceId: input.workspaceId,
-          voucherType: input.voucherType,
-          number: assigned.number,
-          numberingSchemeId: assigned.scheme?.id ?? input.numberingSchemeId,
-          date: input.date,
-          effectiveDate: input.effectiveDate,
-          invoiceNumber: input.invoiceNumber,
-          invoiceDate: input.invoiceDate,
-          dueDate: input.dueDate,
-          creditDays: input.creditDays,
-          partyLedgerId: input.partyLedgerId,
-          reference: input.reference,
-          narration: input.narration,
-          placeOfSupply: input.placeOfSupply,
-          gstRegistration: input.gstRegistration,
-          reverseCharge: input.reverseCharge,
-          status: input.status,
-          currency: input.currency,
-          totalDebitMinor: totals.totalDebitMinor,
-          totalCreditMinor: totals.totalCreditMinor,
-          roundOffAmountMinor,
-          roundOffLedgerId: input.roundOffLedgerId,
-          source: input.source,
-          sourceRef: input.sourceRef,
-          groupIds: input.groupIds,
-          accountingId: input.accountingId,
-          tags: input.tags,
-          tally: input.tally,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      );
+      const voucher = buildVoucherRecord(input, {
+        id: voucherId,
+        number: assigned.number,
+        numberingSchemeId: assigned.scheme?.id ?? input.numberingSchemeId,
+        now,
+      });
 
       if (assigned.schemeToPersist) {
         await db.numberingSchemes.put(assigned.schemeToPersist);
