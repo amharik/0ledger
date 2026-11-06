@@ -39,14 +39,14 @@ Updated: 2026-11-06
 
 ## M2 — Ingestion
 
-- [ ] `.eml` import + MIME/attachment routing
-- [ ] Webmail DOM capture (Gmail)
-- [ ] CSV / Excel statement parsers
-- [ ] Text PDF + password-protected PDF (pdf.js)
-- [ ] Bank adapters: HDFC, ICICI, SBI, Axis, Kotak, IDFC First, Yes, PNB, BoB, Canara
-- [ ] FASTag adapters (PDF/CSV), vehicle/plaza grouping
-- [ ] Staged import, confidence, dedupe, undo
-- [ ] Optional Gmail API sync (restricted scope disclosure)
+- [x] `.eml` import + MIME/attachment routing
+- [x] Webmail DOM capture (Gmail)
+- [x] CSV / Excel statement parsers
+- [x] Text PDF + password-protected PDF (pdf.js)
+- [x] Bank adapters: HDFC, ICICI, SBI, Axis, Kotak, IDFC First, Yes, PNB, BoB, Canara
+- [x] FASTag adapters (PDF/CSV), vehicle/plaza grouping
+- [x] Staged import, confidence, dedupe, undo
+- [x] Optional Gmail API sync (restricted scope disclosure)
 
 ## M3 — Reconciliation
 

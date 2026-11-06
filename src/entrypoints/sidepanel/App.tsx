@@ -8,6 +8,7 @@ import type { Ledger, StockItem, Voucher, VoucherType } from '@/core/model';
 import { useWorkspace } from '@/ui/workspace';
 import { InvoiceEntry } from '@/ui/InvoiceEntry';
 import { ReportsPanel } from '@/ui/ReportsPanel';
+import { StatementImport } from '@/ui/StatementImport';
 import { VoucherReview } from '@/ui/VoucherReview';
 
 type Side = 'debit' | 'credit';
@@ -401,6 +402,17 @@ export default function App() {
               </div>
             </form>
           </section>
+
+          <StatementImport
+            workspaceId={bundle.workspace.id}
+            ledgers={ledgerList}
+            refreshToken={refreshToken}
+            onChanged={(message) => {
+              setNotice(message);
+              setFormError(undefined);
+              setRefreshToken((value) => value + 1);
+            }}
+          />
 
           <InvoiceEntry
             workspaceId={bundle.workspace.id}

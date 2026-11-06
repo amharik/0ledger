@@ -8,7 +8,7 @@ export default defineConfig({
     short_name: '0ledger',
     description:
       'Local-first double-entry ledger for Indian businesses. Parse email, bank statements and FASTag, then reconcile.',
-    permissions: ['storage', 'unlimitedStorage', 'alarms', 'sidePanel', 'identity'],
+    permissions: ['storage', 'unlimitedStorage', 'alarms', 'sidePanel', 'identity', 'scripting', 'activeTab'],
     optional_host_permissions: [
       'https://www.googleapis.com/*',
       'https://mail.google.com/*',
