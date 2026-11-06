@@ -10,7 +10,7 @@ Updated: 2026-11-06
 - [x] WXT + React + TypeScript scaffold
 - [x] README, plan, roadmap, Tally mapping docs
 - [x] Vitest harness with `fake-indexeddb`
-- [ ] CI (lint + typecheck + tests) on PRs to `dev`
+- [x] CI (typecheck + tests + build) on pushes/PRs to `dev`
 
 ## M1A — Ledger core (current)
 
