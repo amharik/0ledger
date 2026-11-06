@@ -31,11 +31,11 @@ Updated: 2026-11-06
 
 ## M1B — Invoicing & reports
 
-- [ ] Sales / Purchase invoices with optional item lines
-- [ ] Bill-wise allocations, party outstanding
-- [ ] Trial balance, P&L, balance sheet, bill aging
-- [ ] GST/TDS capture fields (no computation)
-- [ ] Stock-item capture schema (valuation-ready, no valuation)
+- [x] Sales / Purchase invoices with optional item lines
+- [x] Bill-wise allocations, party outstanding
+- [x] Trial balance, P&L, balance sheet, bill aging
+- [x] GST/TDS capture fields (no computation)
+- [x] Stock-item capture schema (valuation-ready, no valuation)
 
 ## M2 — Ingestion
 

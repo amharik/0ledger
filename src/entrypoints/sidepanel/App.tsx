@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { getDb } from '@/core/db/db';
 import { getPostedVoucher, postVoucher, type PostedVoucher } from '@/core/ledger';
+import { listParties, listStockItems, type PartyView } from '@/core/db/master-service';
 import { trialBalance, type TrialBalance } from '@/core/ledger/reports';
 import { formatMinor, parseAmountToMinor } from '@/core/money/money';
-import type { Ledger, Voucher, VoucherType } from '@/core/model';
+import type { Ledger, StockItem, Voucher, VoucherType } from '@/core/model';
 import { useWorkspace } from '@/ui/workspace';
+import { InvoiceEntry } from '@/ui/InvoiceEntry';
+import { ReportsPanel } from '@/ui/ReportsPanel';
 import { VoucherReview } from '@/ui/VoucherReview';
 
 type Side = 'debit' | 'credit';
@@ -60,6 +63,8 @@ export default function App() {
   const [voucherCount, setVoucherCount] = useState(0);
   const [selectedId, setSelectedId] = useState<string>();
   const [selected, setSelected] = useState<PostedVoucher>();
+  const [parties, setParties] = useState<PartyView[]>([]);
+  const [stockItems, setStockItems] = useState<StockItem[]>([]);
 
   const workspaceId = bundle?.workspace.id;
   const ledgerList = bundle?.ledgers ?? [];
@@ -92,6 +97,23 @@ export default function App() {
     })().catch((cause) => {
       if (!cancelled) setFormError(errorMessage(cause));
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, refreshToken]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    void Promise.all([listParties(getDb(), workspaceId), listStockItems(getDb(), workspaceId)])
+      .then(([partyRows, stockRows]) => {
+        if (cancelled) return;
+        setParties(partyRows);
+        setStockItems(stockRows);
+      })
+      .catch((cause) => {
+        if (!cancelled) setFormError(errorMessage(cause));
+      });
     return () => {
       cancelled = true;
     };
@@ -210,10 +232,6 @@ export default function App() {
       setSaving(false);
     }
   }
-
-  const nonZeroRows = tb?.rows.filter(
-    (row) => row.closingMinor !== 0 || row.debitMinor !== 0 || row.creditMinor !== 0,
-  );
 
   return (
     <main className="shell">
@@ -384,6 +402,18 @@ export default function App() {
             </form>
           </section>
 
+          <InvoiceEntry
+            workspaceId={bundle.workspace.id}
+            ledgers={ledgerList}
+            parties={parties}
+            stockItems={stockItems}
+            onPosted={(message) => {
+              setNotice(message);
+              setFormError(undefined);
+              setRefreshToken((value) => value + 1);
+            }}
+          />
+
           <section className="card">
             <div className="section-head">
               <h2>Recent vouchers</h2>
@@ -445,40 +475,7 @@ export default function App() {
             />
           ) : null}
 
-          <section className="card">
-            <div className="section-head">
-              <h2>Trial balance</h2>
-              <span className="muted small">{nonZeroRows?.length ?? 0} ledgers</span>
-            </div>
-            {!nonZeroRows || nonZeroRows.length === 0 ? (
-              <p className="muted">Post a voucher to see balances.</p>
-            ) : (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Ledger</th>
-                      <th>Group</th>
-                      <th className="num">Dr</th>
-                      <th className="num">Cr</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {nonZeroRows.map((row) => (
-                      <tr key={row.ledgerId}>
-                        <td>{row.name}</td>
-                        <td className="muted small">{row.tallyParent}</td>
-                        <td className="num">{row.closingMinor > 0 ? formatMinor(row.closingMinor) : '—'}</td>
-                        <td className="num">
-                          {row.closingMinor < 0 ? formatMinor(-row.closingMinor) : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <ReportsPanel workspaceId={bundle.workspace.id} refreshToken={refreshToken} />
         </>
       ) : null}
     </main>

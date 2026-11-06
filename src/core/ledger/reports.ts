@@ -265,3 +265,175 @@ export async function vouchersInPeriod(
 export function ledgerDisplay(ledger: Ledger): string {
   return ledger.readableName || ledger.name;
 }
+
+export interface PartyOutstandingRow {
+  partyLedgerId: string;
+  ledgerId: string;
+  partyName: string;
+  type: 'debtor' | 'creditor' | 'both';
+  balanceMinor: number;
+  outstandingMinor: number;
+  billCount: number;
+}
+
+export async function partyOutstanding(
+  db: LedgerDatabase,
+  workspaceId: string,
+): Promise<PartyOutstandingRow[]> {
+  const [tb, ledgers, parties, bills, vouchers] = await Promise.all([
+    trialBalance(db, workspaceId),
+    db.ledgers.where('workspaceId').equals(workspaceId).toArray(),
+    db.parties.where('workspaceId').equals(workspaceId).toArray(),
+    db.billAllocations.where('workspaceId').equals(workspaceId).toArray(),
+    db.vouchers.where('workspaceId').equals(workspaceId).toArray(),
+  ]);
+  const ledgerById = new Map(ledgers.map((ledger) => [ledger.id, ledger]));
+  const partyByLedger = new Map(parties.map((party) => [party.ledgerId, party]));
+  const regularVoucherIds = new Set(
+    vouchers.filter((voucher) => voucher.status === 'regular').map((voucher) => voucher.id),
+  );
+  const billCounts = new Map<string, number>();
+  for (const bill of bills) {
+    if (!regularVoucherIds.has(bill.voucherId)) continue;
+    billCounts.set(bill.ledgerId, (billCounts.get(bill.ledgerId) ?? 0) + 1);
+  }
+
+  return tb.rows
+    .map((row): PartyOutstandingRow | undefined => {
+      const ledger = ledgerById.get(row.ledgerId);
+      if (!ledger || (!ledger.isParty && !partyByLedger.has(ledger.id))) return undefined;
+      const party = partyByLedger.get(ledger.id);
+      const type = party?.type ?? (ledger.nature === 'asset' ? 'debtor' : 'creditor');
+      const outstanding =
+        type === 'creditor' ? Math.max(0, -row.closingMinor) : Math.max(0, row.closingMinor);
+      return {
+        partyLedgerId: ledger.id,
+        ledgerId: ledger.id,
+        partyName: ledger.name,
+        type,
+        balanceMinor: row.closingMinor,
+        outstandingMinor: outstanding,
+        billCount: billCounts.get(ledger.id) ?? 0,
+      };
+    })
+    .filter((row): row is PartyOutstandingRow => row !== undefined)
+    .sort((a, b) => b.outstandingMinor - a.outstandingMinor || a.partyName.localeCompare(b.partyName));
+}
+
+export type AgingBucket = 'current' | '1-15' | '16-30' | '31-60' | '61-90' | '90+';
+
+export interface BillAgingRow {
+  ledgerId: string;
+  partyName: string;
+  billRef: string;
+  invoiceVoucherId: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string;
+  originalMinor: number;
+  settledMinor: number;
+  outstandingMinor: number;
+  daysOverdue: number;
+  bucket: AgingBucket;
+}
+
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function daysBetween(from: string, to: string): number {
+  const start = Date.parse(`${from}T00:00:00.000Z`);
+  const end = Date.parse(`${to}T00:00:00.000Z`);
+  return Math.floor((end - start) / 86_400_000);
+}
+
+export function agingBucket(daysOverdue: number): AgingBucket {
+  if (daysOverdue <= 0) return 'current';
+  if (daysOverdue <= 15) return '1-15';
+  if (daysOverdue <= 30) return '16-30';
+  if (daysOverdue <= 60) return '31-60';
+  if (daysOverdue <= 90) return '61-90';
+  return '90+';
+}
+
+export async function billAging(
+  db: LedgerDatabase,
+  workspaceId: string,
+  asOf = new Date().toISOString().slice(0, 10),
+): Promise<BillAgingRow[]> {
+  const [bills, vouchers, ledgers] = await Promise.all([
+    db.billAllocations.where('workspaceId').equals(workspaceId).toArray(),
+    db.vouchers.where('workspaceId').equals(workspaceId).toArray(),
+    db.ledgers.where('workspaceId').equals(workspaceId).toArray(),
+  ]);
+  const voucherById = new Map(
+    vouchers.filter((voucher) => voucher.status === 'regular').map((voucher) => [voucher.id, voucher]),
+  );
+  const ledgerById = new Map(ledgers.map((ledger) => [ledger.id, ledger]));
+
+  interface BucketState {
+    ledgerId: string;
+    billRef: string;
+    invoice?: Voucher;
+    originalMinor: number;
+    settledMinor: number;
+    dueDate?: string;
+  }
+  const groups = new Map<string, BucketState>();
+
+  for (const allocation of bills) {
+    const voucher = voucherById.get(allocation.voucherId);
+    if (!voucher) continue;
+    const key = `${allocation.ledgerId}\u0000${allocation.billRef}`;
+    const state =
+      groups.get(key) ??
+      ({
+        ledgerId: allocation.ledgerId,
+        billRef: allocation.billRef,
+        originalMinor: 0,
+        settledMinor: 0,
+      } satisfies BucketState);
+
+    if (allocation.billType === 'Against Ref') {
+      state.settledMinor += Math.abs(allocation.amountMinor);
+    } else if (allocation.billType === 'New Ref' || allocation.billType === 'Advance') {
+      state.originalMinor += Math.abs(allocation.amountMinor);
+      if (!state.invoice) state.invoice = voucher;
+      const due =
+        allocation.dueDate ??
+        (allocation.creditDays != null
+          ? addDays(voucher.date, allocation.creditDays)
+          : voucher.dueDate);
+      if (due) state.dueDate = due;
+    }
+    groups.set(key, state);
+  }
+
+  return [...groups.values()]
+    .map((state): BillAgingRow | undefined => {
+      const outstanding = Math.max(0, state.originalMinor - state.settledMinor);
+      if (outstanding === 0) return undefined;
+      const ledger = ledgerById.get(state.ledgerId);
+      const invoice = state.invoice;
+      const dueDate = state.dueDate ?? invoice?.dueDate ?? invoice?.date ?? asOf;
+      const daysOverdue = Math.max(0, daysBetween(dueDate, asOf));
+      return {
+        ledgerId: state.ledgerId,
+        partyName: ledger?.name ?? state.ledgerId,
+        billRef: state.billRef,
+        invoiceVoucherId: invoice?.id ?? '',
+        invoiceNumber: invoice?.number ?? '',
+        invoiceDate: invoice?.date ?? '',
+        dueDate,
+        originalMinor: state.originalMinor,
+        settledMinor: state.settledMinor,
+        outstandingMinor: outstanding,
+        daysOverdue,
+        bucket: agingBucket(daysOverdue),
+      };
+    })
+    .filter((row): row is BillAgingRow => row !== undefined)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.partyName.localeCompare(b.partyName));
+}

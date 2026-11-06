@@ -4,7 +4,7 @@ Local-first, double-entry bookkeeping for Indian businesses — in a browser ext
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel) and FASTag statements, turns it into a Tally-compatible ledger, and helps you reconcile it. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
-> Status: early development. Ledger core, manual voucher entry and review, chart of accounts, workspace settings, encrypted backups, and the workbook template/xlsx renderer are working. Drive mirror and statement importers are next. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: early development. Ledger core, vouchers, invoices, bill-wise reports, chart of accounts, encrypted backups, and workbook rendering are working. Statement ingestion and Drive mirror are next. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
 
