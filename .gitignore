@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# build output
+.output/
+dist/
+*.zip
+
+# wxt
+.wxt/
+.wxt-types/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# test / coverage
+coverage/
+
+# local data & fixtures
+fixtures/incoming/
+*.local.json

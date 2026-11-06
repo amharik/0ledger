@@ -1,0 +1,39 @@
+{
+  "name": "0ledger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first double-entry ledger for Indian businesses. Parse email, bank statements, and FASTag; mirror to Google Sheets.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "dexie": "^4.4.7",
+    "dexie-react-hooks": "^4.4.0",
+    "exceljs": "^4.4.0",
+    "papaparse": "^5.7.0",
+    "pdfjs-dist": "^6.5.438",
+    "postal-mime": "^4.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.7",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@wxt-dev/module-react": "^1.2.2",
+    "fake-indexeddb": "^6.2.7",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0",
+    "wxt": "^0.21.5"
+  }
+}
