@@ -9,6 +9,7 @@ import {
 import { getDb } from '@/core/db/db';
 import { createWorkspace } from '@/core/db/workspace-service';
 import type { Workspace } from '@/core/model';
+import ChartOfAccounts from '@/ui/ChartOfAccounts';
 import { getActiveWorkspaceId, listWorkspaces, setActiveWorkspaceId } from '@/ui/workspace';
 
 function errorMessage(cause: unknown): string {
@@ -239,6 +240,13 @@ export default function App() {
           </button>
         </form>
       </section>
+
+      {activeId ? (
+        <section className="card">
+          <h2>Chart of accounts</h2>
+          <ChartOfAccounts workspaceId={activeId} />
+        </section>
+      ) : null}
 
       <section className="card">
         <h2>Encrypted backup</h2>

@@ -25,7 +25,7 @@ Updated: 2026-11-06
 - [x] Encrypted backup / restore (AES-256-GCM + PBKDF2, replace/merge)
 - [x] Manual voucher entry UI (Payment / Receipt / Contra / Journal)
 - [x] Workspace + company settings UI, encrypted backup UI
-- [ ] Ledger / account editor
+- [x] Ledger / account editor (add, rename via service, opening balances, archive/delete)
 - [ ] Voucher review, edit, cancel, and delete UI
 - [ ] Workbook template spec renderer (xlsx + Sheets)
 
