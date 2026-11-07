@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { getDb } from '@/core/db/db';
 import { getPostedVoucher, postVoucher, type PostedVoucher } from '@/core/ledger';
 import { listParties, listStockItems, type PartyView } from '@/core/db/master-service';
-import { trialBalance, type TrialBalance } from '@/core/ledger/reports';
+import { partyOutstanding, trialBalance, type TrialBalance } from '@/core/ledger/reports';
 import { formatMinor, parseAmountToMinor } from '@/core/money/money';
 import type { Ledger, StockItem, Voucher, VoucherType } from '@/core/model';
 import { useWorkspace } from '@/ui/workspace';
 import { InvoiceEntry } from '@/ui/InvoiceEntry';
+import { ReconciliationPanel } from '@/ui/ReconciliationPanel';
 import { ReportsPanel } from '@/ui/ReportsPanel';
 import { StatementImport } from '@/ui/StatementImport';
 import { VoucherReview } from '@/ui/VoucherReview';
@@ -62,6 +63,9 @@ export default function App() {
   const [tb, setTb] = useState<TrialBalance>();
   const [recent, setRecent] = useState<Voucher[]>([]);
   const [voucherCount, setVoucherCount] = useState(0);
+  const [openMatches, setOpenMatches] = useState(0);
+  const [matchedLines, setMatchedLines] = useState(0);
+  const [partyDue, setPartyDue] = useState(0);
   const [selectedId, setSelectedId] = useState<string>();
   const [selected, setSelected] = useState<PostedVoucher>();
   const [parties, setParties] = useState<PartyView[]>([]);
@@ -79,13 +83,22 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       const db = getDb();
-      const [report, vouchers] = await Promise.all([
+      const [report, vouchers, statementLines, partiesReport] = await Promise.all([
         trialBalance(db, workspaceId),
         db.vouchers.where('workspaceId').equals(workspaceId).toArray(),
+        db.statementLines.where('workspaceId').equals(workspaceId).toArray(),
+        partyOutstanding(db, workspaceId),
       ]);
       if (cancelled) return;
       setTb(report);
       setVoucherCount(vouchers.length);
+      setOpenMatches(
+        statementLines.filter(
+          (line) => line.matchStatus === 'unmatched' || line.matchStatus === 'suggested',
+        ).length,
+      );
+      setMatchedLines(statementLines.filter((line) => line.matchStatus === 'matched').length);
+      setPartyDue(partiesReport.reduce((sum, row) => sum + row.outstandingMinor, 0));
       setRecent(
         vouchers
           .sort(
@@ -303,6 +316,24 @@ export default function App() {
               <span className="muted small">Vouchers</span>
               <strong>{voucherCount}</strong>
             </div>
+            <div>
+              <span className="muted small">Bank balance</span>
+              <strong>
+                {formatMinor(
+                  tb?.rows.find((row) => row.name === 'Bank Account')?.closingMinor ?? 0,
+                )}
+              </strong>
+            </div>
+            <div>
+              <span className="muted small">Party due</span>
+              <strong>{formatMinor(partyDue)}</strong>
+            </div>
+            <div>
+              <span className="muted small">Open matches</span>
+              <strong className={openMatches > 0 ? 'negative' : 'positive'}>
+                {openMatches} · {matchedLines} matched
+              </strong>
+            </div>
           </section>
 
           <section className="card">
@@ -402,6 +433,17 @@ export default function App() {
               </div>
             </form>
           </section>
+
+          <ReconciliationPanel
+            workspaceId={bundle.workspace.id}
+            ledgers={ledgerList}
+            refreshToken={refreshToken}
+            onChanged={(message) => {
+              setNotice(message);
+              setFormError(undefined);
+              setRefreshToken((value) => value + 1);
+            }}
+          />
 
           <StatementImport
             workspaceId={bundle.workspace.id}

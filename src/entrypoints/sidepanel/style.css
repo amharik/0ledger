@@ -494,3 +494,57 @@ textarea {
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
+
+.reconcile-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reconcile-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 6px;
+  padding: 5px 6px;
+}
+
+.split-box {
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.split-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.split-row input {
+  width: auto;
+}

@@ -15,6 +15,7 @@ import type {
   LedgerGroup,
   NumberingScheme,
   Party,
+  Reconciliation,
   StatementLine,
   StockItem,
   TaxAllocation,
@@ -24,7 +25,7 @@ import type {
 } from '../model';
 
 export const DB_NAME = '0ledger';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export interface KeyValue {
   key: string;
@@ -51,6 +52,7 @@ export class LedgerDatabase extends Dexie {
   attachments!: Table<Attachment, string>;
   importBatches!: Table<ImportBatch, string>;
   statementLines!: Table<StatementLine, string>;
+  reconciliations!: Table<Reconciliation, string>;
   auditEvents!: Table<AuditEvent, string>;
   driveLinks!: Table<DriveLink, string>;
   syncState!: Table<KeyValue, string>;
@@ -85,6 +87,11 @@ export class LedgerDatabase extends Dexie {
       driveLinks: 'id, workspaceId, fileId',
       syncState: 'key',
       settings: 'key',
+    });
+
+    this.version(2).stores({
+      reconciliations:
+        'id, workspaceId, statementLineId, voucherId, [workspaceId+status], [statementLineId+status]',
     });
   }
 }

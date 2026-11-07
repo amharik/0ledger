@@ -7,6 +7,8 @@ import {
   MATCH_STATUSES,
   NUMBERING_RESET_PERIODS,
   PARTY_TYPES,
+  RECONCILIATION_METHODS,
+  RECONCILIATION_STATUSES,
   ROUNDING_MODES,
   TALLY_PRIMARY_GROUPS,
   TAX_ROUNDING_LEVELS,
@@ -520,6 +522,21 @@ export const StatementLineSchema = z
   .merge(TimestampedSchema)
   .strict();
 
+export const ReconciliationSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    statementLineId: entityId,
+    voucherId: entityId,
+    amountMinor: minorAmount,
+    method: z.enum(RECONCILIATION_METHODS).default('manual'),
+    status: z.enum(RECONCILIATION_STATUSES).default('confirmed'),
+    confidence: z.number().min(0).max(1).default(1),
+    note: longText.optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
 export const AuditEventSchema = z
   .object({
     id: entityId,
@@ -576,6 +593,7 @@ export type VoucherLine = z.infer<typeof VoucherLineSchema>;
 export type ItemLine = z.infer<typeof ItemLineSchema>;
 export type Attachment = z.infer<typeof AttachmentSchema>;
 export type ImportBatch = z.infer<typeof ImportBatchSchema>;
+export type Reconciliation = z.infer<typeof ReconciliationSchema>;
 export type StatementLine = z.infer<typeof StatementLineSchema>;
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
 export type DriveLink = z.infer<typeof DriveLinkSchema>;

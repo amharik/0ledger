@@ -50,11 +50,11 @@ Updated: 2026-11-06
 
 ## M3 — Reconciliation
 
-- [ ] Statement ↔ voucher matcher (ref → amount+date → fuzzy)
-- [ ] Unmatched queue, manual link, 1:N splits
-- [ ] Balance assertions per statement period
-- [ ] Bill-wise / party reconciliation
-- [ ] Dashboard
+- [x] Statement ↔ voucher matcher (ref → amount+date → fuzzy)
+- [x] Unmatched queue, manual link, 1:N splits
+- [x] Balance assertions per statement period
+- [x] Bill-wise / party reconciliation
+- [x] Dashboard
 
 ## M4 — Drive sync
 

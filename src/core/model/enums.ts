@@ -89,3 +89,9 @@ export type ImportStatus = (typeof IMPORT_STATUSES)[number];
 
 export const MATCH_STATUSES = ['unmatched', 'suggested', 'matched', 'ignored'] as const;
 export type MatchStatus = (typeof MATCH_STATUSES)[number];
+
+export const RECONCILIATION_METHODS = ['reference', 'amount-date', 'fuzzy', 'manual'] as const;
+export type ReconciliationMethod = (typeof RECONCILIATION_METHODS)[number];
+
+export const RECONCILIATION_STATUSES = ['suggested', 'confirmed', 'rejected'] as const;
+export type ReconciliationStatus = (typeof RECONCILIATION_STATUSES)[number];
