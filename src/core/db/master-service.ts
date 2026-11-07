@@ -8,6 +8,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from './db';
+import { markDriveDirty } from './sync-state';
 
 export interface PartyView {
   party: Party;
@@ -71,6 +72,7 @@ export async function updateParty(
     updatedAt: nowIso(),
   });
   await db.parties.put(updated);
+  await markDriveDirty(db, current.workspaceId);
   return updated;
 }
 
@@ -126,6 +128,7 @@ export async function createStockItem(
     }),
   );
   await db.stockItems.add(item);
+  await markDriveDirty(db, input.workspaceId);
   return item;
 }
 
@@ -169,6 +172,7 @@ export async function updateStockItem(
     updatedAt: nowIso(),
   });
   await db.stockItems.put(updated);
+  await markDriveDirty(db, current.workspaceId);
   return updated;
 }
 

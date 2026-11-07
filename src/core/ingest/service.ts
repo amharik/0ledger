@@ -1,4 +1,5 @@
 import { getDb } from '@/core/db/db';
+import { markDriveDirty } from '@/core/db/sync-state';
 import type { LedgerDatabase } from '@/core/db/db';
 import { newId, nowIso } from '@/core/ids';
 import {
@@ -119,6 +120,7 @@ export async function stageImport(
     await db.statementLines.bulkAdd(lines);
   });
 
+  await markDriveDirty(db, input.workspaceId);
   return { batch, lines, duplicates };
 }
 
@@ -364,6 +366,7 @@ export async function commitImportBatch(
       }),
     ),
   );
+  await markDriveDirty(db, workspaceId);
   return { batch: updated, committed, failed, errors };
 }
 
@@ -405,6 +408,7 @@ export async function undoImportBatch(
     committedLines: 0,
     updatedAt: nowIso(),
   });
+  await markDriveDirty(db, workspaceId);
   return restored;
 }
 

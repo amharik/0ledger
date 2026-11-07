@@ -1,4 +1,5 @@
 import { newId, nowIso } from '../ids';
+import { markDriveDirty } from '../db/sync-state';
 import { compact } from '../util/objects';
 import {
   AuditEventSchema,
@@ -7,7 +8,6 @@ import {
   type ReconciliationMethod,
   type StatementLine,
   type Voucher,
-  type VoucherLine,
 } from '../model';
 import type { LedgerDatabase } from '../db/db';
 import { billAging, type BillAgingRow } from './reports';
@@ -269,6 +269,7 @@ export async function confirmStatementMatch(
       ),
     );
   });
+  await markDriveDirty(db, workspaceId);
   return records;
 }
 
@@ -340,6 +341,7 @@ export async function ignoreStatementLine(
       }),
     ),
   );
+  await markDriveDirty(db, workspaceId);
 }
 
 export async function listStatementMatchQueue(
@@ -408,5 +410,3 @@ export async function reconcileParty(
     outstandingMinor: bills.reduce((sum, row) => sum + row.outstandingMinor, 0),
   };
 }
-
-export type { VoucherLine };

@@ -15,6 +15,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from '../db/db';
+import { markDriveDirty } from '../db/sync-state';
 import { buildVoucherChildren, buildVoucherRecord } from './voucher-records';
 
 export interface PostedVoucher {
@@ -218,6 +219,7 @@ export async function postVoucher(
     },
   );
 
+  await markDriveDirty(db, input.workspaceId);
   return {
     voucher: posted,
     lines,

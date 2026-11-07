@@ -237,3 +237,40 @@ th {
   text-align: right;
   white-space: nowrap;
 }
+
+
+.drive-panel h3 {
+  margin: 18px 0 8px;
+  font-size: 14px;
+}
+
+.drive-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.drive-diff {
+  margin-top: 18px;
+  overflow-x: auto;
+}
+
+.drive-diff table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.drive-diff th,
+.drive-diff td {
+  border-bottom: 1px solid #e5e7eb;
+  padding: 4px 6px;
+  text-align: right;
+}
+
+.drive-diff th:first-child,
+.drive-diff td:first-child {
+  text-align: left;
+}

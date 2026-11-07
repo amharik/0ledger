@@ -73,7 +73,7 @@ local ledger (IndexedDB) ── attachments (OPFS) ── encrypted backups
 
 ## 7. Workbook template
 
-Tabs: `_meta`, `_sync`, `CoA`, `Parties`, `Items`, `Godowns`, `Vouchers`, `VoucherLines`, `ItemLines`, `BillAllocations`, `CostCenters`, `TaxAllocations`, `TallyFields`, `TrialBalance`, `ProfitAndLoss`, `BalanceSheet`, `PartyOutstanding`, `BillAging`, `Reconcile`, `<Account> — Ledger`, `Dashboard`, `ReadMe`.
+Tabs: `_meta`, `_sync`, `_snapshot` (chunked restore payload), `CoA`, `Parties`, `Items`, `Godowns`, `Vouchers`, `VoucherLines`, `ItemLines`, `BillAllocations`, `CostCenters`, `TaxAllocations`, `TallyFields`, `TrialBalance`, `ProfitAndLoss`, `BalanceSheet`, `PartyOutstanding`, `BillAging`, `Reconcile`, `Segments Weekly`, `Segments Biweekly`, `Segments Monthly`, `Segments Quarterly`, `Segments Custom`, `<Account> — Ledger`, `Dashboard`, `ReadMe`.
 
 - One template spec renders both `.xlsx` (ExcelJS) and Google Sheets (Sheets API).
 - Formulas pre-provisioned to a bounded row count (default 5,000), using `SUMIFS`, `INDEX/MATCH`, `IFERROR`, `ROUND`.

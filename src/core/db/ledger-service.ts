@@ -8,6 +8,7 @@ import {
   type Party,
 } from '../model';
 import type { LedgerDatabase } from './db';
+import { markDriveDirty } from './sync-state';
 
 export interface CreateLedgerInput {
   workspaceId: string;
@@ -139,6 +140,7 @@ export async function createLedger(
     if (party) await db.parties.add(party);
   });
 
+  await markDriveDirty(db, input.workspaceId);
   return party ? { ledger, party } : { ledger };
 }
 
@@ -169,6 +171,7 @@ export async function updateLedger(
   });
   const updated = LedgerSchema.parse({ ...current, ...patch });
   await db.ledgers.put(updated);
+  await markDriveDirty(db, current.workspaceId);
   return updated;
 }
 
@@ -190,5 +193,6 @@ export async function removeLedger(
     await db.parties.where('ledgerId').equals(ledgerId).delete();
     await db.ledgers.delete(ledgerId);
   });
+  await markDriveDirty(db, ledger.workspaceId);
   return 'deleted';
 }

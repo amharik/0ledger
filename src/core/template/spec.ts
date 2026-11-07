@@ -1,6 +1,7 @@
 import { nowIso } from '../ids';
 import type { Ledger, Voucher, VoucherLine } from '../model';
 import type { WorkbookData } from './data';
+import { snapshotRows } from './snapshot';
 import {
   formula,
   type Cell,
@@ -15,6 +16,8 @@ export interface WorkbookBuildOptions {
   /** Used for bill-aging day counts; defaults to today (ISO date). */
   today?: string;
   generatedAt?: string;
+  /** Custom period ranges for the Segments Custom tab (ISO dates, inclusive). */
+  periodSegments?: { label: string; from: string; to: string }[];
 }
 
 function amountColumn(header: string, width = 14): SheetColumn {
@@ -140,6 +143,72 @@ function ledgerStatementRows(
   return rows;
 }
 
+function addDays(dateIso: string, days: number): string {
+  const date = new Date(`${dateIso}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function addMonths(dateIso: string, months: number): string {
+  const date = new Date(`${dateIso}T00:00:00.000Z`);
+  const day = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, lastDay));
+  return date.toISOString().slice(0, 10);
+}
+
+function dateRanges(
+  start: string,
+  end: string,
+  stepDays: number,
+  label: (from: string) => string,
+): { label: string; from: string; to: string }[] {
+  const ranges: { label: string; from: string; to: string }[] = [];
+  let cursor = start;
+  while (cursor <= end) {
+    const next = addDays(cursor, stepDays - 1);
+    const to = next < end ? next : end;
+    ranges.push({ label: label(cursor), from: cursor, to });
+    cursor = addDays(to, 1);
+  }
+  return ranges;
+}
+
+function monthRanges(
+  start: string,
+  end: string,
+): { label: string; from: string; to: string }[] {
+  const ranges: { label: string; from: string; to: string }[] = [];
+  let cursor = start;
+  while (cursor <= end) {
+    const monthStart = `${cursor.slice(0, 7)}-01`;
+    const monthEnd = addDays(addMonths(monthStart, 1), -1);
+    const to = monthEnd < end ? monthEnd : end;
+    ranges.push({ label: cursor.slice(0, 7), from: cursor, to });
+    cursor = addDays(to, 1);
+  }
+  return ranges;
+}
+
+function quarterlySegmentRanges(
+  start: string,
+  end: string,
+): { label: string; from: string; to: string }[] {
+  const ranges: { label: string; from: string; to: string }[] = [];
+  let cursor = start;
+  let index = 1;
+  while (cursor <= end) {
+    const quarterEnd = addDays(addMonths(cursor, 3), -1);
+    const to = quarterEnd < end ? quarterEnd : end;
+    ranges.push({ label: `Q${index}`, from: cursor, to });
+    cursor = addDays(to, 1);
+    index += 1;
+  }
+  return ranges;
+}
+
 export function buildWorkbookSpec(
   data: WorkbookData,
   options: WorkbookBuildOptions = {},
@@ -240,6 +309,16 @@ export function buildWorkbookSpec(
       { header: 'UpdatedAt', width: 26 },
     ],
     syncRows,
+  );
+
+  addSheet(
+    '_snapshot',
+    [
+      { header: 'Chunk', width: 8 },
+      { header: 'Json', width: 200 },
+    ],
+    snapshotRows(data),
+    false,
   );
 
   addSheet(
@@ -547,6 +626,52 @@ export function buildWorkbookSpec(
         JSON.stringify(voucher.tally),
       ]),
   );
+
+  const regularVouchersByDate = [...regularVouchers].sort((a, b) => a.date.localeCompare(b.date));
+  const booksEnd = addDays(addMonths(data.company.booksBegin, 12), -1);
+  const segmentTotals = (from: string, to: string) => {
+    const inRange = regularVouchersByDate.filter(
+      (voucher) => voucher.date >= from && voucher.date <= to,
+    );
+    return {
+      vouchers: inRange.length,
+      debit: inRange.reduce((sum, voucher) => sum + voucher.totalDebitMinor, 0),
+      credit: inRange.reduce((sum, voucher) => sum + voucher.totalCreditMinor, 0),
+    };
+  };
+  const segmentRows = (
+    ranges: { label: string; from: string; to: string }[],
+  ): Cell[][] =>
+    ranges.map((range) => {
+      const totals = segmentTotals(range.from, range.to);
+      return [
+        range.label,
+        range.from,
+        range.to,
+        totals.vouchers,
+        amount(totals.debit),
+        amount(totals.credit),
+      ];
+    });
+  const segmentColumns = [
+    { header: 'Segment', width: 14 },
+    { header: 'From', width: 12 },
+    { header: 'To', width: 12 },
+    { header: 'Vouchers', width: 10 },
+    amountColumn('Debit'),
+    amountColumn('Credit'),
+  ];
+  const weeklyRanges = dateRanges(data.company.booksBegin, booksEnd, 7, (from) => `W ${from}`);
+  const biweeklyRanges = dateRanges(data.company.booksBegin, booksEnd, 14, (from) => `B ${from}`);
+  const monthlyRanges = monthRanges(data.company.booksBegin, booksEnd);
+  const quarterlyRanges = quarterlySegmentRanges(data.company.booksBegin, booksEnd);
+  addSheet('Segments Weekly', segmentColumns, segmentRows(weeklyRanges));
+  addSheet('Segments Biweekly', segmentColumns, segmentRows(biweeklyRanges));
+  addSheet('Segments Monthly', segmentColumns, segmentRows(monthlyRanges));
+  addSheet('Segments Quarterly', segmentColumns, segmentRows(quarterlyRanges));
+  if (options.periodSegments && options.periodSegments.length > 0) {
+    addSheet('Segments Custom', segmentColumns, segmentRows(options.periodSegments));
+  }
 
   const tbRows: Cell[][] = data.trialBalance.rows.map((row) => [
     row.tallyParent,

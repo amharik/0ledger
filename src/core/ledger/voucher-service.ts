@@ -1,4 +1,5 @@
 import { newId, nowIso } from '../ids';
+import { markDriveDirty } from '../db/sync-state';
 import {
   AuditEventSchema,
   NewVoucherSchema,
@@ -130,6 +131,7 @@ export async function updateVoucher(
     },
   );
 
+  await markDriveDirty(db, input.workspaceId);
   return { voucher, ...children };
 }
 
@@ -161,6 +163,7 @@ export async function cancelVoucher(
     await db.vouchers.put(cancelled);
     await db.auditEvents.add(audit);
   });
+  await markDriveDirty(db, existing.workspaceId);
   return cancelled;
 }
 
@@ -212,4 +215,5 @@ export async function deleteVoucher(
       await db.auditEvents.add(audit);
     },
   );
+  await markDriveDirty(db, existing.workspaceId);
 }

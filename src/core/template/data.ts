@@ -19,6 +19,8 @@ import type {
   LedgerGroup,
   NumberingScheme,
   Party,
+  Reconciliation,
+  AuditEvent,
   StatementLine,
   StockItem,
   TaxAllocation,
@@ -45,6 +47,8 @@ export interface WorkbookData {
   costCenterAllocations: CostCenterAllocation[];
   taxAllocations: TaxAllocation[];
   statementLines: StatementLine[];
+  reconciliations: Reconciliation[];
+  auditEvents: AuditEvent[];
   trialBalance: TrialBalance;
   profitAndLoss: ProfitAndLoss;
   balanceSheet: BalanceSheet;
@@ -75,6 +79,8 @@ export async function loadWorkbookData(
     costCenterAllocations,
     taxAllocations,
     statementLines,
+    reconciliations,
+    auditEvents,
     trialBalanceReport,
     profitAndLossReport,
     balanceSheetReport,
@@ -94,6 +100,8 @@ export async function loadWorkbookData(
     db.costCenterAllocations.where('workspaceId').equals(workspaceId).toArray(),
     db.taxAllocations.where('workspaceId').equals(workspaceId).toArray(),
     db.statementLines.where('workspaceId').equals(workspaceId).toArray(),
+    db.reconciliations.where('workspaceId').equals(workspaceId).toArray(),
+    db.auditEvents.where('workspaceId').equals(workspaceId).toArray(),
     trialBalance(db, workspaceId),
     profitAndLoss(db, workspaceId),
     balanceSheet(db, workspaceId),
@@ -117,6 +125,8 @@ export async function loadWorkbookData(
     costCenterAllocations,
     taxAllocations,
     statementLines,
+    reconciliations,
+    auditEvents,
     trialBalance: trialBalanceReport,
     profitAndLoss: profitAndLossReport,
     balanceSheet: balanceSheetReport,

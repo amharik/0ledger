@@ -4,7 +4,7 @@ Local-first, double-entry bookkeeping for Indian businesses — in a browser ext
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel) and FASTag statements, turns it into a Tally-compatible ledger, and helps you reconcile it. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
-> Status: early development. Ledger core, vouchers, invoices, reports, ingestion, reconciliation, chart of accounts, encrypted backups, and workbook rendering are working. Drive mirror is next. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: early development. Ledger core, vouchers, invoices, reports, ingestion, reconciliation, chart of accounts, encrypted backups, workbook rendering, and Google Drive sync (Sheets mirror, monthly XLSX archives, pull/conflict/restore) are working. Interchange exports are next. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
 
@@ -72,9 +72,9 @@ src/
     numbering/      voucher numbering schemes
     ledger/         validation, Tally readiness, reports
     backup/         encrypted AES-GCM backup and restore
-    template/       single workbook template spec (xlsx + Sheets)
-    parsers/        email + statement adapters (planned)
-    sync/           Drive folder + Sheets mirror (planned)
+    template/       single workbook template spec (xlsx + Sheets + snapshot)
+    ingest/         email, statement, FASTag and Gmail adapters
+    drive/          OAuth PKCE, Drive folders, Sheets mirror, archives, restore
   ui/               shared React hooks and workspace state
 docs/
   PLAN.md           full product/technical plan
@@ -82,6 +82,18 @@ docs/
   TALLY.md          Tally XML field mapping
 tests/              Vitest + fixture harness
 ```
+
+## Google Drive setup
+
+1. Create a Google Cloud project and enable the **Google Drive API** and **Google Sheets API**.
+2. Configure the OAuth consent screen (External is fine for personal use) and create an OAuth
+   client of type **Web application** for the Chrome extension redirect
+   `https://<extension-id>.chromiumapp.org/`.
+3. Open **0ledger settings → Google Drive sync**, paste the client ID, and connect.
+
+0ledger uses PKCE, requests only `drive.file`, stores refresh tokens in `chrome.storage.local`, and
+only overwrites workbooks where `appProperties.app = 0ledger`. Sheets mirrors are plaintext by
+design; use encrypted `.0ledger` backups for portable encrypted copies.
 
 ## Privacy & security
 

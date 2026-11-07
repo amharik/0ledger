@@ -2,7 +2,7 @@
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Updated: 2026-11-06
+Updated: 2026-11-07
 
 ## M0 — Foundations
 
@@ -58,12 +58,12 @@ Updated: 2026-11-06
 
 ## M4 — Drive sync
 
-- [ ] OAuth PKCE (`drive.file`), app-created detection
-- [ ] `0ledger/<workspace>/` folder, one workbook per workspace
-- [ ] Segmented tabs (weekly/biweekly/monthly/quarterly/custom)
-- [ ] Idempotent upsert flush (`_sync`), offline queue, alarms
-- [ ] Monthly `.xlsx` archive
-- [ ] Pull / conflict diff / restore
+- [x] OAuth PKCE (`drive.file`), app-created detection
+- [x] `0ledger/<workspace>/` folder, one workbook per workspace
+- [x] Segmented tabs (weekly/biweekly/monthly/quarterly/custom)
+- [x] Idempotent upsert flush (`_sync`), offline queue, alarms
+- [x] Monthly `.xlsx` archive
+- [x] Pull / conflict diff / restore
 
 ## M5 — Interchange
 

@@ -118,6 +118,10 @@ describe('workbook template spec', () => {
         'PartyOutstanding',
         'BillAging',
         'Reconcile',
+        'Segments Weekly',
+        'Segments Biweekly',
+        'Segments Monthly',
+        'Segments Quarterly',
         'Dashboard',
         'ReadMe',
       ]),
@@ -157,6 +161,18 @@ describe('workbook template spec', () => {
     const aging = sheetNamed(spec, 'BillAging');
     expect(aging.rows[0]?.[0]).toBe('INV/2026-27/0001');
     expect(aging.rows[0]?.[7]).toBe('31-60');
+  });
+
+  it('adds custom segmented tabs', async () => {
+    const { data } = await seeded();
+    const spec = buildWorkbookSpec(data, {
+      generatedAt: '2026-11-06T12:00:00.000Z',
+      periodSegments: [{ label: 'Launch', from: '2026-10-01', to: '2026-12-31' }],
+    });
+    const custom = sheetNamed(spec, 'Segments Custom');
+    expect(custom.rows[0]?.[0]).toBe('Launch');
+    expect(custom.rows[0]?.[3]).toBe(2);
+    expect(sheetNamed(spec, 'Segments Monthly').rows.length).toBe(12);
   });
 
   it('puts cached formulas on summary tabs', async () => {

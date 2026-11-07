@@ -10,6 +10,7 @@ import { getDb } from '@/core/db/db';
 import { createWorkspace } from '@/core/db/workspace-service';
 import type { Workspace } from '@/core/model';
 import ChartOfAccounts from '@/ui/ChartOfAccounts';
+import DrivePanel from '@/ui/DrivePanel';
 import { getActiveWorkspaceId, listWorkspaces, setActiveWorkspaceId } from '@/ui/workspace';
 
 function errorMessage(cause: unknown): string {
@@ -245,6 +246,13 @@ export default function App() {
         <section className="card">
           <h2>Chart of accounts</h2>
           <ChartOfAccounts workspaceId={activeId} />
+        </section>
+      ) : null}
+
+      {activeId ? (
+        <section className="card">
+          <h2>Google Drive sync</h2>
+          <DrivePanel workspaceId={activeId} />
         </section>
       ) : null}
 
