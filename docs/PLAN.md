@@ -18,7 +18,7 @@ A zero-backend, local-first browser extension for Indian small-business bookkeep
 | Portable formats | Beancount-first open model; Tally XML, CSV, OFX exports |
 | Drive | Google Sheets live mirror + monthly `.xlsx` archive; one workbook per workspace |
 | Auto-detect | App-created files only (`drive.file`); external files via pasted URL/ID |
-| Tally XML | Deferred export; model captures every Tally field from day one |
+| Tally XML | Export/import; model captures every Tally field from day one |
 | Runtime | Chromium MV3; no backend; no remote code |
 
 ## 3. Layered design
@@ -126,7 +126,15 @@ My Drive/0ledger/<workspace-slug>/
 - Balance assertion per statement period; bill-wise and party reconciliation.
 - Rounding differences surface as explicit postings, never hidden.
 
-## 13. Security & privacy
+## 13. Interchange
+
+- Tally XML masters and vouchers in separate envelopes or a combined file; export is gated by Tally readiness unless explicitly overridden.
+- Tally XML import recreates groups, ledgers, stock items, bills, cost centres and inventory lines, then posts through the same validation/numbering path.
+- Beancount export uses sanitised `Assets` / `Liabilities` / `Equity` / `Income` / `Expenses` accounts and preserves 0ledger ids in metadata; import dedupes by `source-ref` or a content hash.
+- CSV exports cover voucher lines, ledgers and trial balance. OFX exports one bank ledger statement at a time.
+- Re-imports are idempotent: Tally uses content hashes plus type/date/number checks, Beancount uses `source-ref` metadata or content hashes.
+
+## 14. Security & privacy
 
 - No server, no remote code; strict MV3 CSP.
 - Minimal permissions; optional Google host access only when connected.
@@ -135,10 +143,10 @@ My Drive/0ledger/<workspace-slug>/
 - Append-only audit trail; stable GUIDs for Tally.
 - Threat guards: size limits, zip-bomb protection, sanitized HTML, parser sandboxing.
 
-## 14. Delivery phases
+## 15. Delivery phases
 
 See [ROADMAP.md](ROADMAP.md). Critical path: M1A → M1B → M2 → M3 → M4 → M5 → M6. M2 and M4 can run in parallel after M1B.
 
-## 15. Out of scope (v1)
+## 16. Out of scope (v1)
 
 Inventory valuation/COGS/stock reports, GST computation/returns, payroll, bank API integrations, Safari/Firefox packaging, cloud backend.

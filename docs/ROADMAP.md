@@ -2,7 +2,7 @@
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Updated: 2026-11-07
+Updated: 2026-11-08
 
 ## M0 — Foundations
 
@@ -67,10 +67,10 @@ Updated: 2026-11-07
 
 ## M5 — Interchange
 
-- [ ] Beancount export/import
-- [ ] CSV / OFX export
-- [ ] Tally XML export (Prime; ERP 9 where compatible)
-- [ ] Tally XML import round-trip
+- [x] Beancount export/import
+- [x] CSV / OFX export
+- [x] Tally XML export (Prime; ERP 9 where compatible)
+- [x] Tally XML import round-trip
 
 ## M6 — Hardening
 
@@ -85,6 +85,6 @@ Updated: 2026-11-07
 - [ ] Every voucher balances to zero minor units; 10k-entry no-drift test
 - [ ] Round-off and multi-currency conversion always post explicitly
 - [ ] Numbering: FY rollover, uniqueness, atomic save
-- [ ] Tally readiness blocks export on missing required fields
+- [x] Tally readiness blocks export on missing required fields
 - [ ] Re-running Sheets flush is a no-op
 - [ ] Restore from Drive reproduces the local ledger

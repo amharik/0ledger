@@ -4,7 +4,7 @@ Local-first, double-entry bookkeeping for Indian businesses — in a browser ext
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel) and FASTag statements, turns it into a Tally-compatible ledger, and helps you reconcile it. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
-> Status: early development. Ledger core, vouchers, invoices, reports, ingestion, reconciliation, chart of accounts, encrypted backups, workbook rendering, and Google Drive sync (Sheets mirror, monthly XLSX archives, pull/conflict/restore) are working. Interchange exports are next. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: early development. Ledger core, vouchers, invoices, reports, ingestion, reconciliation, chart of accounts, encrypted backups, workbook rendering, Google Drive sync (Sheets mirror, monthly XLSX archives, pull/conflict/restore), and Tally/Beancount/CSV/OFX interchange are working. Inventory hardening and packaging are next. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
 
@@ -75,6 +75,7 @@ src/
     template/       single workbook template spec (xlsx + Sheets + snapshot)
     ingest/         email, statement, FASTag and Gmail adapters
     drive/          OAuth PKCE, Drive folders, Sheets mirror, archives, restore
+    interchange/    Tally XML, Beancount, CSV, OFX import/export
   ui/               shared React hooks and workspace state
 docs/
   PLAN.md           full product/technical plan
@@ -94,6 +95,16 @@ tests/              Vitest + fixture harness
 0ledger uses PKCE, requests only `drive.file`, stores refresh tokens in `chrome.storage.local`, and
 only overwrites workbooks where `appProperties.app = 0ledger`. Sheets mirrors are plaintext by
 design; use encrypted `.0ledger` backups for portable encrypted copies.
+
+## Interchange
+
+Open **0ledger settings → Interchange & Tally** to download voucher lines, ledgers, trial balance,
+OFX, Beancount and Tally XML. Beancount and Tally XML can also be imported back into a workspace.
+
+Tally export runs readiness checks first (Tally parent groups, party masters, GST fields, numbering
+and balances). Override with **Allow Tally export even when readiness checks fail** only if you
+accept Tally-specific data loss. Imported vouchers always pass through the normal double-entry
+validation and numbering path; re-imports are deduplicated.
 
 ## Privacy & security
 

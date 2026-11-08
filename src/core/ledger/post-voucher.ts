@@ -8,6 +8,7 @@ import {
   type CostCenterAllocation,
   type ItemLine,
   type NewVoucher,
+  type NewVoucherInput,
   type NumberingScheme,
   type TaxAllocation,
   type Voucher,
@@ -146,7 +147,7 @@ async function assignNumber(
 
 export async function postVoucher(
   db: LedgerDatabase,
-  rawInput: NewVoucher,
+  rawInput: NewVoucherInput,
   options: PostVoucherOptions = {},
 ): Promise<PostedVoucher> {
   const input = NewVoucherSchema.parse(rawInput);

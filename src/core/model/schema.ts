@@ -588,6 +588,7 @@ export type TaxAllocation = z.infer<typeof TaxAllocationSchema>;
 export type VoucherLineInput = z.infer<typeof VoucherLineInputSchema>;
 export type ItemLineInput = z.infer<typeof ItemLineInputSchema>;
 export type NewVoucher = z.infer<typeof NewVoucherSchema>;
+export type NewVoucherInput = z.input<typeof NewVoucherSchema>;
 export type Voucher = z.infer<typeof VoucherSchema>;
 export type VoucherLine = z.infer<typeof VoucherLineSchema>;
 export type ItemLine = z.infer<typeof ItemLineSchema>;
