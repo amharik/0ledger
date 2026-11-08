@@ -83,7 +83,7 @@ Updated: 2026-11-08
 ## Release gates
 
 - [x] Every voucher balances to zero minor units; 10k-entry no-drift test (`npm run test:stress`)
-- [ ] Round-off is explicit; multi-currency conversion needs a base-currency/FX-gain design before this can be claimed
+- [x] Round-off posts explicitly; multi-currency is capture-only, with no implicit conversion
 - [x] Numbering: FY rollover, uniqueness, atomic save
 - [x] Tally readiness blocks export on missing required fields
 - [x] Re-running Sheets flush is a no-op
