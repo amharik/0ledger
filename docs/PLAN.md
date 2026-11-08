@@ -11,8 +11,8 @@ A zero-backend, local-first browser extension for Indian small-business bookkeep
 | Voucher scope | Full accounting: Contra, Payment, Receipt, Journal, Sales, Purchase, Credit/Debit Note (+ delivery/receipt notes in schema) |
 | GST/TDS | Capture fields only; no computation or returns |
 | Company | One company per workspace; FY filtered by date (April–March default) |
-| Inventory | MVP: capture item lines only, no valuation; schema is valuation-ready |
-| Multi-currency | Capture fields only; INR-first; explicit round-off / forex lines |
+| Inventory | Full additive inventory: item lines, stock items, FIFO / weighted-average / standard-cost valuation and stock reports |
+| Multi-currency | Capture fields only; INR-first; no implicit conversion or FX gain/loss posting |
 | Numbering | Auto per voucher type + FY, editable, uniqueness enforced |
 | Ledger presentation | Tally-style Dr/Cr vouchers and groups |
 | Portable formats | Beancount-first open model; Tally XML, CSV, OFX exports |
@@ -40,10 +40,10 @@ local ledger (IndexedDB) ── attachments (OPFS) ── encrypted backups
 ## 4. Money, currency and round-off
 
 - All amounts are **integer minor units** (paise for INR). No float arithmetic on money.
-- Multi-currency stores `currency`, `forexAmountMinor`, `exchangeRate` (decimal string), `baseAmountMinor`.
+- Multi-currency stores `currency`, `forexAmountMinor` and `exchangeRate` (decimal string); `amountMinor` stays the posted amount. Reports remain INR-first/company-currency and do not convert foreign lines.
 - Company policy: `roundingMode` (half-up/half-even), `invoiceRoundTo` (0.01/1/5), `taxRoundingLevel` (line/invoice), `roundOffLedgerId`.
 - Round once at the voucher total. The difference is always posted to a `Round Off` ledger, so Dr = Cr exactly.
-- Forex conversion difference posts to `Forex Gain/Loss` (configurable).
+- Forex gain/loss posting is deferred until a base-currency reporting design lands; the current build never converts implicitly.
 - Reconciliation never absorbs rounding; differences are surfaced and must be posted.
 - Tally stores `roundOffAmount` and `roundOffLedgerId`.
 
@@ -114,7 +114,7 @@ My Drive/0ledger/<workspace-slug>/
 
 - CSV (PapaParse), Excel (ExcelJS), text PDF and password-protected PDF (pdf.js).
 - Password prompt on `PasswordException`; optional encrypted remember-for-batch.
-- Scanned PDFs: detect empty text layer; optional OCR (flagged, later).
+- Scanned PDFs: detect an empty text layer and raise `ScannedPdfError` with `requiresOcr`; OCR itself is not bundled (`OCR_ENABLED = false`).
 - Data-driven adapters: HDFC, ICICI, SBI, Axis, Kotak, IDFC First, Yes, PNB, BoB, Canara + FASTag.
 - Dedupe: Message-ID, UTR/reference, amount+date+merchant, file SHA-256.
 - Import preview, edit, undo; nothing posts without review by default.
@@ -149,4 +149,4 @@ See [ROADMAP.md](ROADMAP.md). Critical path: M1A → M1B → M2 → M3 → M4 �
 
 ## 16. Out of scope (v1)
 
-Inventory valuation/COGS/stock reports, GST computation/returns, payroll, bank API integrations, Safari/Firefox packaging, cloud backend.
+Automatic COGS posting, GST computation/returns, payroll, bank API integrations, OCR execution, Safari/Firefox packaging, cloud backend.
