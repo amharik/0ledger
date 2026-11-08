@@ -12,6 +12,7 @@ import type { Workspace } from '@/core/model';
 import ChartOfAccounts from '@/ui/ChartOfAccounts';
 import DrivePanel from '@/ui/DrivePanel';
 import InterchangePanel from '@/ui/InterchangePanel';
+import StockItemsPanel from '@/ui/StockItemsPanel';
 import { getActiveWorkspaceId, listWorkspaces, setActiveWorkspaceId } from '@/ui/workspace';
 
 function errorMessage(cause: unknown): string {
@@ -247,6 +248,13 @@ export default function App() {
         <section className="card">
           <h2>Chart of accounts</h2>
           <ChartOfAccounts workspaceId={activeId} />
+        </section>
+      ) : null}
+
+      {activeId ? (
+        <section className="card">
+          <h2>Stock items</h2>
+          <StockItemsPanel workspaceId={activeId} />
         </section>
       ) : null}
 

@@ -4,7 +4,7 @@ Local-first, double-entry bookkeeping for Indian businesses — in a browser ext
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel) and FASTag statements, turns it into a Tally-compatible ledger, and helps you reconcile it. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
-> Status: early development. Ledger core, vouchers, invoices, reports, ingestion, reconciliation, chart of accounts, encrypted backups, workbook rendering, Google Drive sync (Sheets mirror, monthly XLSX archives, pull/conflict/restore), and Tally/Beancount/CSV/OFX interchange are working. Inventory hardening and packaging are next. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: early development. Ledger core, vouchers, invoices, reports, stock valuation, ingestion, reconciliation, chart of accounts, encrypted backups, workbook rendering, Google Drive sync (Sheets mirror, monthly XLSX archives, pull/conflict/restore), and Tally/Beancount/CSV/OFX interchange are working. Chromium is the only supported target; see [docs/CROSS_BROWSER.md](docs/CROSS_BROWSER.md).
 
 ## Why
 
@@ -112,10 +112,18 @@ validation and numbering path; re-imports are deduplicated.
 - Email bodies and statement contents are processed on-device. Parsed data is staged before commit.
 - Never stores mailbox passwords. Protected PDFs ask for a password at parse time; optional "remember this batch" is encrypted.
 - Google Sheets mirror is plaintext in your Drive by design; local data and backups can be encrypted.
+- Scanned PDFs without a text layer are flagged as requiring OCR; this build does not bundle OCR.
+
+See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md) for details.
 
 ## Contributing
 
-Bank and FASTag formats change. Adapters are data-driven; see `docs/ROADMAP.md` and (soon) `docs/ADAPTERS.md`. Please submit **anonymized** statement fixtures only.
+Bank and FASTag formats change. Adapters are data-driven; see [docs/ADAPTERS.md](docs/ADAPTERS.md). Please submit **anonymized** statement fixtures only.
+
+## Packaging
+
+`npm run build` writes `.output/chrome-mv3/`; `npm run zip` creates a distributable zip. See
+[docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
 
 ## License
 

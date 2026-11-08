@@ -10,6 +10,7 @@ import { InvoiceEntry } from '@/ui/InvoiceEntry';
 import { ReconciliationPanel } from '@/ui/ReconciliationPanel';
 import { ReportsPanel } from '@/ui/ReportsPanel';
 import { StatementImport } from '@/ui/StatementImport';
+import { StockReport } from '@/ui/StockReport';
 import { VoucherReview } from '@/ui/VoucherReview';
 
 type Side = 'debit' | 'credit';
@@ -530,6 +531,8 @@ export default function App() {
           ) : null}
 
           <ReportsPanel workspaceId={bundle.workspace.id} refreshToken={refreshToken} />
+
+          <StockReport workspaceId={bundle.workspace.id} refreshToken={refreshToken} />
         </>
       ) : null}
     </main>

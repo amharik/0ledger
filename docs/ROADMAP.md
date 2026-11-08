@@ -74,11 +74,11 @@ Updated: 2026-11-08
 
 ## M6 — Hardening
 
-- [ ] Full inventory (additive: valuation, stock reports)
-- [ ] OCR for scanned PDFs (flagged)
-- [ ] Adapter SDK + schema + contribution guide
-- [ ] Privacy policy, security review, packaging
-- [ ] Cross-browser evaluation (Firefox/Safari)
+- [x] Full inventory (additive: valuation, stock reports)
+- [x] OCR for scanned PDFs (flagged: detect and reject with `requiresOcr`)
+- [x] Adapter SDK + schema + contribution guide
+- [x] Privacy policy, security review, packaging
+- [x] Cross-browser evaluation (Firefox/Safari)
 
 ## Release gates
 

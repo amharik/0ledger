@@ -360,6 +360,17 @@ export async function parseXlsxStatement(
   return statementFromRows(rowsFromTable(table, adapter, options), adapter, options);
 }
 
+export class ScannedPdfError extends Error {
+  readonly requiresOcr = true;
+
+  constructor(message = 'PDF has no text layer. OCR is required but is not enabled in this build.') {
+    super(message);
+    this.name = 'ScannedPdfError';
+  }
+}
+
+export const OCR_ENABLED = false;
+
 async function pdfText(bytes: ArrayBuffer | Uint8Array, password?: string): Promise<string> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -462,6 +473,9 @@ export async function parsePdfStatement(
   options: ParseStatementOptions & { password?: string } = {},
 ): Promise<ParsedStatement> {
   const text = await pdfText(bytes, options.password);
+  if (!OCR_ENABLED && text.replace(/\s/g, '').length < 20) {
+    throw new ScannedPdfError();
+  }
   const adapter = resolveAdapter(text, options);
   return {
     ...statementFromRows(parseTextRows(text, adapter, options), adapter, options),

@@ -5,3 +5,11 @@ export * from './email';
 export * from './service';
 export * from './gmail';
 export * from './fastag';
+
+export {
+  StatementAdapterSchema,
+  adapterTemplate,
+  defineAdapter,
+  validateAdapter,
+  validateAdapterRegistry,
+} from './adapter-sdk';

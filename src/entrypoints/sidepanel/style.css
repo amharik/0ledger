@@ -548,3 +548,19 @@ textarea {
 .split-row input {
   width: auto;
 }
+
+
+.stock-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.stock-total strong {
+  font-size: 18px;
+}

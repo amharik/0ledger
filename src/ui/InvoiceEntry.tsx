@@ -194,6 +194,8 @@ export function InvoiceEntry({ workspaceId, ledgers, parties, stockItems, onPost
           rateMinor: parseAmountToMinor(item.rate || '0'),
           amountMinor: amountFor(item),
           discountMinor: 0,
+          direction:
+            voucherType === 'Sales' || voucherType === 'Debit Note' ? 'out' : 'in',
         })),
       });
       onPosted(`Posted ${posted.voucher.number} · ${formatMinor(totalMinor)}`);
