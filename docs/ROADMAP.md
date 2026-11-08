@@ -82,9 +82,9 @@ Updated: 2026-11-08
 
 ## Release gates
 
-- [ ] Every voucher balances to zero minor units; 10k-entry no-drift test
-- [ ] Round-off and multi-currency conversion always post explicitly
-- [ ] Numbering: FY rollover, uniqueness, atomic save
+- [x] Every voucher balances to zero minor units; 10k-entry no-drift test (`npm run test:stress`)
+- [ ] Round-off is explicit; multi-currency conversion needs a base-currency/FX-gain design before this can be claimed
+- [x] Numbering: FY rollover, uniqueness, atomic save
 - [x] Tally readiness blocks export on missing required fields
-- [ ] Re-running Sheets flush is a no-op
-- [ ] Restore from Drive reproduces the local ledger
+- [x] Re-running Sheets flush is a no-op
+- [x] Restore from Drive reproduces the local ledger

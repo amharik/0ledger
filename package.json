@@ -12,6 +12,7 @@
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:stress": "STRESS=1 vitest run tests/release-stress.test.ts",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

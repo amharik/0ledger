@@ -26,6 +26,16 @@ describe('voucher balance', () => {
     expect(result.issues.some((issue) => issue.code === 'voucher.unbalanced')).toBe(true);
   });
 
+  it('balances each currency independently', () => {
+    const result = validateLineBalance([
+      { currency: 'INR', amountMinor: 100_000 },
+      { currency: 'INR', amountMinor: -100_000 },
+      { currency: 'USD', amountMinor: 1_000 },
+      { currency: 'USD', amountMinor: -1_000 },
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
   it('computes debit/credit totals', () => {
     const totals = computeTotals([
       { currency: 'INR', amountMinor: 100 },

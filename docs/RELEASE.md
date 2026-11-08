@@ -6,6 +6,7 @@
 npm ci
 npm run compile
 npm test -- --run
+npm run test:stress   # 10k-voucher no-drift gate (~15s)
 npm run build
 npm run zip
 ```
