@@ -92,9 +92,10 @@ tests/              Vitest + fixture harness
    `https://<extension-id>.chromiumapp.org/`.
 3. Open **0ledger settings → Google Drive sync**, paste the client ID, and connect.
 
-0ledger uses PKCE, requests only `drive.file`, stores refresh tokens in `chrome.storage.local`, and
-only overwrites workbooks where `appProperties.app = 0ledger`. Sheets mirrors are plaintext by
-design; use encrypted `.0ledger` backups for portable encrypted copies.
+0ledger uses PKCE, requests only `drive.file`, stores refresh tokens in `chrome.storage.local`
+(access tokens stay in memory), and only overwrites workbooks where `appProperties.app = 0ledger`.
+Optional Gmail import requests `gmail.readonly` only when you enable it. Sheets mirrors are plaintext
+by design; use encrypted `.0ledger` backups for portable encrypted copies.
 
 ## Interchange
 

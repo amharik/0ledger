@@ -25,7 +25,9 @@ it created or that you explicitly opened with it; it cannot read your whole Driv
 
 - `.eml` files and pasted webmail content are parsed locally.
 - Optional Gmail sync, if configured, uses read-only Gmail scope and stores only the parsed financial
-  fields you commit. 0ledger never stores mailbox passwords.
+  fields you commit. 0ledger never stores mailbox passwords or raw email bodies.
+- Imported email bodies are sanitized before staging; only short subject/from metadata and parsed
+  statement lines are retained.
 - The webmail capture flow reads the visible message only when you invoke it.
 
 ## Statement passwords

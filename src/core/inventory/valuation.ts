@@ -95,6 +95,10 @@ function inferDirection(line: ItemLine, voucher: Voucher, warnings: string[]): '
   if (line.direction) return line.direction;
   if (INBOUND_TYPES.has(voucher.voucherType)) return 'in';
   if (OUTBOUND_TYPES.has(voucher.voucherType)) return 'out';
+  if (voucher.voucherType === 'Stock Journal' || voucher.voucherType === 'Physical Stock') {
+    const quantity = numericQuantity(line.quantity);
+    if (quantity !== 0) return quantity < 0 ? 'out' : 'in';
+  }
   warnings.push(
     `${voucher.voucherType} ${voucher.number} item "${line.description}" has no direction; treated as inward`,
   );
@@ -243,6 +247,19 @@ export async function stockReport(
   const states = new Map<string, ItemState>();
   const globalWarnings: string[] = [];
 
+  for (const item of stockItems) {
+    if (options.stockItemId && item.id !== options.stockItemId) continue;
+    const key = `stock:${item.id}`;
+    states.set(
+      key,
+      stateFor(key, item, {
+        description: item.name,
+        quantity: item.openingQuantity ?? '0',
+        amountMinor: item.openingValueMinor ?? 0,
+      } as ItemLine),
+    );
+  }
+
   const movements: MovementInput[] = [];
   for (const line of itemLines) {
     const voucher = voucherById.get(line.voucherId);
@@ -285,6 +302,11 @@ export async function stockReport(
       applyInbound(state, quantity, valueMinor);
     } else {
       costMinor = applyOutbound(state, quantity);
+      if (state.valueMinor < 0 && state.quantity > 0) {
+        state.warnings.push(
+          `${state.name} has negative stock value ${state.valueMinor} at quantity ${state.quantity}; costing exceeded available layers`,
+        );
+      }
     }
     output.push({
       itemLineId: line.id,

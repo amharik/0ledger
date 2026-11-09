@@ -168,6 +168,60 @@ export async function postVoucher(
   const { lines, items, billAllocations, costCenterAllocations, taxAllocations } =
     buildVoucherChildren(input, voucherId, now);
 
+  const stockIds = [...new Set(items.flatMap((item) => (item.stockItemId ? [item.stockItemId] : [])))];
+  const stockItems = await db.stockItems.bulkGet(stockIds);
+  const missingStock = stockIds.filter((id, index) => {
+    const item = stockItems[index];
+    return !item || item.workspaceId !== input.workspaceId;
+  });
+  if (missingStock.length > 0) {
+    throw new LedgerValidationError([
+      {
+        code: 'item-line.stock-item-missing',
+        severity: 'error',
+        message: `Unknown stock item: ${missingStock.join(', ')}`,
+      },
+    ]);
+  }
+
+  const godownIds = [...new Set(items.flatMap((item) => (item.godownId ? [item.godownId] : [])))];
+  const godowns = await db.godowns.bulkGet(godownIds);
+  const missingGodown = godownIds.filter((id, index) => {
+    const godown = godowns[index];
+    return !godown || godown.workspaceId !== input.workspaceId;
+  });
+  if (missingGodown.length > 0) {
+    throw new LedgerValidationError([
+      {
+        code: 'item-line.godown-missing',
+        severity: 'error',
+        message: `Unknown godown: ${missingGodown.join(', ')}`,
+      },
+    ]);
+  }
+
+  const batchIds = [...new Set(items.flatMap((item) => (item.batchId ? [item.batchId] : [])))];
+  const batches = await db.batches.bulkGet(batchIds);
+  const missingBatch = batchIds.filter((id, index) => {
+    const batch = batches[index];
+    if (!batch || batch.workspaceId !== input.workspaceId) return true;
+    return items.some(
+      (item) =>
+        item.batchId === id &&
+        item.stockItemId !== undefined &&
+        item.stockItemId !== batch.stockItemId,
+    );
+  });
+  if (missingBatch.length > 0) {
+    throw new LedgerValidationError([
+      {
+        code: 'item-line.batch-missing',
+        severity: 'error',
+        message: `Unknown or mismatched batch: ${missingBatch.join(', ')}`,
+      },
+    ]);
+  }
+
   const audit = AuditEventSchema.parse(
     compact({
       id: newId('aud'),

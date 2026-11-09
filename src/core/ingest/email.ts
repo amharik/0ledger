@@ -8,6 +8,12 @@ import {
   parseTextStatement,
   parseXlsxStatement,
 } from './parsers';
+import {
+  MAX_EMAIL_ATTACHMENTS,
+  MAX_EMAIL_BODY_CHARS,
+  assertByteLimit,
+  assertTextLimit,
+} from './limits';
 import type { ParsedStatement, ParsedStatementRow } from './types';
 
 export interface ParsedEmailAttachment {
@@ -22,13 +28,19 @@ export interface ParsedEmail {
   date?: string;
   text: string;
   attachments: ParsedEmailAttachment[];
-  raw: Email;
+  raw: { html?: string };
 }
 
 function bytesOf(attachment: Attachment): ArrayBuffer {
   const content = attachment.content;
+  const bytes = bytesFrom(content, attachment.encoding);
+  assertByteLimit(bytes, `Attachment ${attachment.filename ?? ''}`.trim());
+  return bytes;
+}
+
+function bytesFrom(content: Attachment['content'], encoding?: string): ArrayBuffer {
   if (typeof content === 'string') {
-    if (attachment.encoding === 'base64') {
+    if (encoding === 'base64') {
       const binary = atob(content);
       const bytes = new Uint8Array(binary.length);
       for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
@@ -43,18 +55,23 @@ function bytesOf(attachment: Attachment): ArrayBuffer {
 }
 
 export async function parseEmail(source: string | ArrayBuffer | Uint8Array): Promise<ParsedEmail> {
+  if (typeof source === 'string') assertTextLimit(source, 'Email');
+  else assertByteLimit(source, 'Email');
   const email = await PostalMime.parse(source, { attachmentEncoding: 'arraybuffer' });
+  if (email.attachments.length > MAX_EMAIL_ATTACHMENTS) {
+    throw new Error(`Email has too many attachments (max ${MAX_EMAIL_ATTACHMENTS})`);
+  }
   return {
     subject: email.subject ?? '',
     from: email.from?.address ?? '',
     ...(email.date ? { date: email.date } : {}),
-    text: email.text ?? '',
+    text: (email.text ?? '').slice(0, MAX_EMAIL_BODY_CHARS),
     attachments: email.attachments.map((attachment) => ({
-      fileName: attachment.filename ?? 'attachment',
+      fileName: (attachment.filename ?? 'attachment').slice(0, 512),
       mimeType: attachment.mimeType,
       bytes: bytesOf(attachment),
     })),
-    raw: email,
+    raw: email.html ? { html: email.html.slice(0, MAX_EMAIL_BODY_CHARS) } : {},
   };
 }
 
@@ -147,7 +164,10 @@ export function parseAlertText(input: AlertTextInput): ParsedStatement | undefin
     debitMinor: isDebit ? amount : 0,
     creditMinor: isDebit ? 0 : amount,
     currency: 'INR',
-    raw: { subject: input.subject, from: input.from, text: input.text },
+    raw: {
+      ...(input.subject ? { subject: input.subject.slice(0, 512) } : {}),
+      ...(input.from ? { from: input.from.slice(0, 256) } : {}),
+    },
   };
   if (reference) row.reference = reference;
 

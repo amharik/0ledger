@@ -2,6 +2,12 @@ import Papa from 'papaparse';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { parseAmountToMinor } from '@/core/money/money';
 import { detectStatementAdapter, getAdapter } from './adapters';
+import {
+  MAX_PDF_PAGES,
+  assertByteLimit,
+  assertRowLimit,
+  assertTextLimit,
+} from './limits';
 import type {
   ParsedStatement,
   ParsedStatementRow,
@@ -332,10 +338,12 @@ function resolveAdapter(text: string, options: ParseStatementOptions): Statement
 }
 
 export function parseCsvStatement(text: string, options: ParseStatementOptions = {}): ParsedStatement {
+  assertTextLimit(text, 'CSV statement');
   const parsed = Papa.parse<string[]>(text, {
     header: false,
     skipEmptyLines: 'greedy',
   });
+  assertRowLimit(parsed.data.length, 'CSV statement');
   const adapter = resolveAdapter(text, options);
   return statementFromRows(rowsFromTable(parsed.data, adapter, options), adapter, options);
 }
@@ -344,17 +352,20 @@ export async function parseXlsxStatement(
   bytes: ArrayBuffer | Uint8Array,
   options: ParseStatementOptions = {},
 ): Promise<ParsedStatement> {
+  assertByteLimit(bytes, 'Workbook');
   const ExcelJS = await import('exceljs');
   const workbook = new ExcelJS.Workbook();
   const data = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes);
   await workbook.xlsx.load(data as unknown as Parameters<typeof workbook.xlsx.load>[0]);
   const sheet = workbook.worksheets.find((candidate) => candidate.rowCount > 1) ?? workbook.worksheets[0];
   if (!sheet) throw new Error('Workbook has no worksheets');
+  assertRowLimit(sheet.rowCount, 'Workbook');
   const table: unknown[][] = [];
   sheet.eachRow({ includeEmpty: true }, (row) => {
     const values = row.values;
     table.push(Array.isArray(values) ? values.slice(1) : []);
   });
+  assertRowLimit(table.length, 'Workbook');
   const text = table.map((row) => row.map(cellText).join(' ')).join('\n');
   const adapter = resolveAdapter(text, options);
   return statementFromRows(rowsFromTable(table, adapter, options), adapter, options);
@@ -382,6 +393,9 @@ async function pdfText(bytes: ArrayBuffer | Uint8Array, password?: string): Prom
   });
   try {
     const doc = await loadingTask.promise;
+    if (doc.numPages > MAX_PDF_PAGES) {
+      throw new Error(`PDF has too many pages (max ${MAX_PDF_PAGES})`);
+    }
     const lines: string[] = [];
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
       const page = await doc.getPage(pageNumber);
@@ -413,6 +427,7 @@ async function pdfText(bytes: ArrayBuffer | Uint8Array, password?: string): Prom
 const TEXT_AMOUNT = /(?:(?:₹|inr|rs\.?)\s*)?\(?-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\)?\s*(?:cr|dr)?/gi;
 
 export function parseTextRows(text: string, adapter: StatementAdapter, options: ParseStatementOptions = {}): ParsedStatementRow[] {
+  assertTextLimit(text, 'Text statement');
   const rows: ParsedStatementRow[] = [];
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -456,6 +471,7 @@ export function parseTextRows(text: string, adapter: StatementAdapter, options: 
     };
     if (balance !== undefined) row.balanceMinor = balance;
     rows.push(row);
+    assertRowLimit(rows.length, 'Text statement');
   }
   return rows;
 }
@@ -472,6 +488,7 @@ export async function parsePdfStatement(
   bytes: ArrayBuffer | Uint8Array,
   options: ParseStatementOptions & { password?: string } = {},
 ): Promise<ParsedStatement> {
+  assertByteLimit(bytes, 'PDF');
   const text = await pdfText(bytes, options.password);
   if (!OCR_ENABLED && text.replace(/\s/g, '').length < 20) {
     throw new ScannedPdfError();

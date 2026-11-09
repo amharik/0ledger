@@ -1,15 +1,73 @@
+import { z } from 'zod';
 import { nowIso } from '../ids';
 import type { LedgerDatabase } from '../db/db';
 import { DB_VERSION } from '../db/db';
+import {
+  AttachmentSchema,
+  AuditEventSchema,
+  BatchSchema,
+  BillAllocationSchema,
+  CompanyProfileSchema,
+  CostCenterAllocationSchema,
+  CostCenterSchema,
+  DriveLinkSchema,
+  GodownSchema,
+  ImportBatchSchema,
+  ItemLineSchema,
+  LedgerGroupSchema,
+  LedgerSchema,
+  NumberingSchemeSchema,
+  PartySchema,
+  ReconciliationSchema,
+  StatementLineSchema,
+  StockItemSchema,
+  TaxAllocationSchema,
+  VoucherLineSchema,
+  VoucherSchema,
+  WorkspaceSchema,
+} from '../model';
 
 export const BACKUP_FORMAT = '0ledger-backup';
 export const BACKUP_PAYLOAD_FORMAT = '0ledger-backup-payload';
 export const BACKUP_VERSION = 1;
 export const DEFAULT_PBKDF2_ITERATIONS = 600_000;
+export const MAX_PBKDF2_ITERATIONS = 2_000_000;
+export const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
+export const MAX_BACKUP_RECORDS = 1_000_000;
 
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
 const MIN_PASSWORD_LENGTH = 8;
+const MAX_CIPHERTEXT_CHARS = Math.ceil((MAX_BACKUP_BYTES * 4) / 3) + 16;
+
+const KeyValueSchema = z.object({ key: z.string().min(1).max(256), value: z.unknown() }).strict();
+
+const TABLE_SCHEMAS: Record<string, z.ZodTypeAny> = {
+  workspaces: WorkspaceSchema,
+  companies: CompanyProfileSchema,
+  ledgerGroups: LedgerGroupSchema,
+  ledgers: LedgerSchema,
+  parties: PartySchema,
+  stockItems: StockItemSchema,
+  godowns: GodownSchema,
+  batches: BatchSchema,
+  costCenters: CostCenterSchema,
+  numberingSchemes: NumberingSchemeSchema,
+  vouchers: VoucherSchema,
+  voucherLines: VoucherLineSchema,
+  itemLines: ItemLineSchema,
+  billAllocations: BillAllocationSchema,
+  costCenterAllocations: CostCenterAllocationSchema,
+  taxAllocations: TaxAllocationSchema,
+  attachments: AttachmentSchema,
+  importBatches: ImportBatchSchema,
+  statementLines: StatementLineSchema,
+  reconciliations: ReconciliationSchema,
+  auditEvents: AuditEventSchema,
+  driveLinks: DriveLinkSchema,
+  syncState: KeyValueSchema,
+  settings: KeyValueSchema,
+};
 
 export interface BackupEnvelope {
   format: typeof BACKUP_FORMAT;
@@ -130,6 +188,9 @@ export async function encryptBackup(
   if (!Number.isSafeInteger(iterations) || iterations < 100_000) {
     throw new BackupError('PBKDF2 iterations must be at least 100000');
   }
+  if (iterations > MAX_PBKDF2_ITERATIONS) {
+    throw new BackupError(`PBKDF2 iterations must not exceed ${MAX_PBKDF2_ITERATIONS}`);
+  }
 
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
@@ -183,6 +244,7 @@ function assertEnvelope(value: unknown): asserts value is BackupEnvelope {
     envelope.kdf.hash !== 'SHA-256' ||
     !Number.isSafeInteger(envelope.kdf.iterations) ||
     envelope.kdf.iterations < 100_000 ||
+    envelope.kdf.iterations > MAX_PBKDF2_ITERATIONS ||
     typeof envelope.kdf.salt !== 'string'
   ) {
     throw new BackupError('Backup KDF parameters are invalid');
@@ -197,6 +259,15 @@ function assertEnvelope(value: unknown): asserts value is BackupEnvelope {
   }
   if (typeof envelope.ciphertext !== 'string' || envelope.ciphertext.length === 0) {
     throw new BackupError('Backup ciphertext is missing');
+  }
+  if (envelope.ciphertext.length > MAX_CIPHERTEXT_CHARS) {
+    throw new BackupError('Backup ciphertext is too large');
+  }
+  if (base64ToBytes(envelope.kdf.salt).byteLength !== SALT_BYTES) {
+    throw new BackupError('Backup salt has an invalid length');
+  }
+  if (base64ToBytes(envelope.cipher.iv).byteLength !== IV_BYTES) {
+    throw new BackupError('Backup IV has an invalid length');
   }
 }
 
@@ -214,9 +285,22 @@ function assertPayload(value: unknown): asserts value is BackupPayload {
   if (typeof payload.tables !== 'object' || payload.tables === null) {
     throw new BackupError('Backup payload has no tables');
   }
+  if (typeof payload.dbVersion !== 'number' || payload.dbVersion > DB_VERSION) {
+    throw new BackupError('Backup was created by a newer database version');
+  }
+  let total = 0;
   for (const [name, rows] of Object.entries(payload.tables)) {
     if (!Array.isArray(rows)) {
       throw new BackupError(`Backup table "${name}" is not an array`);
+    }
+    total += rows.length;
+    if (total > MAX_BACKUP_RECORDS) throw new BackupError('Backup has too many records');
+    const schema = TABLE_SCHEMAS[name];
+    if (!schema) continue;
+    for (const [index, row] of rows.entries()) {
+      if (!schema.safeParse(row).success) {
+        throw new BackupError(`Backup table "${name}" has invalid row ${index + 1}`);
+      }
     }
   }
 }

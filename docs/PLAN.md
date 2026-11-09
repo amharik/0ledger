@@ -141,7 +141,8 @@ My Drive/0ledger/<workspace-slug>/
 - Secrets never logged; email bodies and statements processed on-device.
 - Encrypted backups and optional encrypted sync; Sheets mirror is plaintext by design.
 - Append-only audit trail; stable GUIDs for Tally.
-- Threat guards: size limits, zip-bomb protection, sanitized HTML, parser sandboxing.
+- Threat guards: file/text/row/page/attachment limits, formula-injection-safe Drive and CSV writes,
+  sanitized raw statement payloads, bounded backup restore and Zod validation of restored rows.
 
 ## 15. Delivery phases
 

@@ -26,7 +26,7 @@ import {
 } from '../model';
 import { buildWorkbookSpec } from '../template/spec';
 import { loadWorkbookData } from '../template/data';
-import { renderSheetsValues } from '../template/sheets';
+import { formulaCells, renderSheetsValues } from '../template/sheets';
 import { renderWorkbookXlsx } from '../template/xlsx';
 import { parseSnapshotChunks, type WorkbookSnapshot } from '../template/snapshot';
 import type { WorkbookSpec } from '../template/types';
@@ -274,6 +274,7 @@ export async function syncWorkspaceToDrive(
   }
 
   const rendered = renderSheetsValues(spec);
+  const formulasBySheet = formulaCells(spec);
   await ensureSheets(
     options.token,
     location.workbook.id,
@@ -290,19 +291,11 @@ export async function syncWorkspaceToDrive(
         sheet.values,
         fetchImpl,
       );
-      const formulas: { row: number; column: number; formula: string }[] = [];
-      sheet.values.forEach((row, rowIndex) => {
-        row.forEach((value, columnIndex) => {
-          if (typeof value === 'string' && value.startsWith('=')) {
-            formulas.push({ row: rowIndex + 2, column: columnIndex, formula: value });
-          }
-        });
-      });
       await writeSheetFormulas(
         options.token,
         location.workbook.id,
         sheet.title,
-        formulas,
+        formulasBySheet.get(sheet.title) ?? [],
         fetchImpl,
       );
     }

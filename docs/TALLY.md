@@ -1,8 +1,8 @@
 # Tally XML field mapping
 
-Tally XML export is planned for M5. This document locks the data we must capture **now** so no information is lost when export is implemented.
+Tally XML export/import is implemented in M5 and hardened in M6.
 
-> Target: Tally Prime. Tally ERP 9 compatibility where practical. XML tag names are indicative and will be verified against a live Tally installation before shipping.
+> Target: Tally Prime. Tally ERP 9 compatibility where practical. XML tag names are verified against fixtures; validate against your Tally build before relying on a production import.
 
 ## Envelope
 
@@ -52,6 +52,8 @@ Masters use `REPORTNAME` `All Masters` or `Ledgers`/`Groups` as required.
 
 ## Voucher header
 
+Emitted by `exportTallyVouchers`:
+
 | Tally field | 0ledger field |
 |---|---|
 | `DATE` (`YYYYMMDD`) | `Voucher.date` |
@@ -59,16 +61,16 @@ Masters use `REPORTNAME` `All Masters` or `Ledgers`/`Groups` as required.
 | `VOUCHERTYPENAME` | `Voucher.voucherType` |
 | `VOUCHERNUMBER` | `Voucher.number` |
 | `REFERENCE` | `Voucher.reference` |
+| `VOUCHERINVOICENUMBER` | `Voucher.invoiceNumber` |
+| `VOUCHERINVOICEDATE` | `Voucher.invoiceDate` |
+| `DUEDATE` / `CREDITDAYS` | `Voucher.dueDate`, `.creditDays` |
 | `NARRATION` | `Voucher.narration` |
 | `PARTYLEDGERNAME` | `Voucher.partyLedgerId` |
 | `PLACEOFSUPPLY` | `Voucher.placeOfSupply` |
-| `GSTREGISTRATIONTYPE` | `Voucher.gstRegistration` |
+| `GSTREGISTRATION` | `Voucher.gstRegistration` |
 | `ISOPTIONAL` / `ISCANCELLED` | `Voucher.status` |
-| `ROUNDOFFLEDGERNAME` | `Voucher.roundOffLedgerId` |
-| `ROUNDOFFAMOUNT` | `Voucher.roundOffAmountMinor` |
+| `ROUNDOFFLEDGERNAME` / `ROUNDOFFAMOUNT` | `Voucher.roundOffLedgerId`, `.roundOffAmountMinor` |
 | `GUID` / `MASTERID` / `ALTERID` | `TallyFields.guid`, `.masterId`, `.alterId` |
-| Invoice no / date | `Voucher.invoiceNumber`, `.invoiceDate` |
-| Due date / credit days | `Voucher.dueDate`, `.creditDays` |
 | Reverse charge | `Voucher.reverseCharge` |
 
 ## Ledger entries
@@ -79,7 +81,7 @@ Masters use `REPORTNAME` `All Masters` or `Ledgers`/`Groups` as required.
 | `ISDEEMEDPOSITIVE` | derived from signed amount (debit = Yes) |
 | `AMOUNT` | `VoucherLine.amountMinor` (signed) |
 | Line narration | `VoucherLine.narration` |
-| Forex fields | `VoucherLine.currency`, `.forexAmountMinor`, `.exchangeRate` |
+| `FOREXAMOUNT` / `EXCHANGERATE` | `VoucherLine.forexAmountMinor`, `.exchangeRate` |
 
 ## Bill-wise allocation
 
@@ -96,13 +98,13 @@ Masters use `REPORTNAME` `All Masters` or `Ledgers`/`Groups` as required.
 | `COSTCENTRENAME` / category | `CostCenter.name`, `.category` |
 | Allocation amount | `CostCenterAllocation.amountMinor` |
 
-## Inventory (captured, valuation deferred)
+## Inventory (captured; valuation implemented)
 
 | Tally field | 0ledger field |
 |---|---|
 | `STOCKITEMNAME` | `ItemLine.stockItemId` / `StockItem.name` |
 | `RATE` / `AMOUNT` | `ItemLine.rate`, `.amountMinor` |
-| `ACTUALQTY` / `BILLEDQTY` | `ItemLine.quantity`, `.billedQuantity` |
+| `ACTUALQTY` / `BILLEDQTY` | `ItemLine.quantity` |
 | `HSNCODE` / `GSTOVRDNTAXABILITY` | `ItemLine.hsnSac` |
 | `GODOWNNAME` / `BATCHNAME` | `ItemLine.godownId`, `.batchId` |
 | UOM | `StockItem.uom` |
@@ -117,6 +119,10 @@ Masters use `REPORTNAME` `All Masters` or `Ledgers`/`Groups` as required.
 | Taxable value / rate | `TaxAllocation.taxableValueMinor`, `.rate` |
 | HSN/SAC | `VoucherLine.hsnSac` or `ItemLine.hsnSac` |
 | TDS section / rate / amount | `TaxAllocation.tdsSection`, `.tdsRate`, `.tdsAmountMinor` |
+
+`TaxAllocation` rows are mirrored in the workbook and can be captured in the invoice UI. Tally XML
+only encodes tax amounts that exist as normal ledger entries; metadata-only allocations without a
+`ledgerId` are not emitted into Tally tax ledgers. Gmail/Drive do not compute GST or TDS.
 
 ## Voucher types
 
@@ -133,6 +139,6 @@ Masters use `REPORTNAME` `All Masters` or `Ledgers`/`Groups` as required.
 - Party ledgers are under Sundry Debtors/Creditors.
 - Invoice numbers are present and unique per party + FY.
 - Bill allocations reference valid bills and do not exceed balances.
-- When tax ledgers are used, GSTIN/HSN/place of supply are present.
-- Item lines reference known stock items (if inventory export is enabled).
+- Tax vouchers warn when place of supply or a party ledger is missing.
+- Item lines reference known stock items and godowns/batches belong to the workspace.
 - Unsupported masters are reported explicitly, never silently dropped.

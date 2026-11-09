@@ -4,7 +4,7 @@ import type { PartyView } from '@/core/db/master-service';
 import { postVoucher } from '@/core/ledger';
 import { formatMinor, parseAmountToMinor } from '@/core/money/money';
 import { compact } from '@/core/util/objects';
-import type { Ledger, StockItem, VoucherLineInput } from '@/core/model';
+import type { Ledger, StockItem, TaxAllocationInput, TaxType, VoucherLineInput } from '@/core/model';
 
 type InvoiceType = 'Sales' | 'Purchase' | 'Credit Note' | 'Debit Note';
 
@@ -20,6 +20,7 @@ interface DraftItem {
 
 const INVOICE_TYPES: InvoiceType[] = ['Sales', 'Purchase', 'Credit Note', 'Debit Note'];
 const DEBIT_PARTY_TYPES = new Set<InvoiceType>(['Sales', 'Debit Note']);
+const TAX_TYPES: TaxType[] = ['CGST', 'SGST', 'IGST', 'CESS', 'VAT', 'Other'];
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -75,6 +76,12 @@ export function InvoiceEntry({ workspaceId, ledgers, parties, stockItems, onPost
   const [placeOfSupply, setPlaceOfSupply] = useState('');
   const [gstRegistration, setGstRegistration] = useState('');
   const [reverseCharge, setReverseCharge] = useState(false);
+  const [taxType, setTaxType] = useState<TaxType>('CGST');
+  const [taxRate, setTaxRate] = useState('');
+  const [taxAmount, setTaxAmount] = useState('');
+  const [tdsSection, setTdsSection] = useState('');
+  const [tdsRate, setTdsRate] = useState('');
+  const [tdsAmount, setTdsAmount] = useState('');
   const [items, setItems] = useState<DraftItem[]>([newItem()]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -139,6 +146,36 @@ export function InvoiceEntry({ workspaceId, ledgers, parties, stockItems, onPost
       return;
     }
 
+    let taxAllocations: TaxAllocationInput[] = [];
+    try {
+      if (taxAmount.trim()) {
+        taxAllocations.push(
+          compact({
+            taxType,
+            amountMinor: Math.abs(parseAmountToMinor(taxAmount)),
+            taxableValueMinor: totalMinor,
+            rate: taxRate.trim() || undefined,
+          }),
+        );
+      }
+      if (tdsAmount.trim()) {
+        taxAllocations.push(
+          compact({
+            taxType: 'TDS' as const,
+            amountMinor: Math.abs(parseAmountToMinor(tdsAmount)),
+            taxableValueMinor: totalMinor,
+            rate: tdsRate.trim() || undefined,
+            tdsSection: tdsSection.trim() || undefined,
+            tdsRate: tdsRate.trim() || undefined,
+            tdsAmountMinor: Math.abs(parseAmountToMinor(tdsAmount)),
+          }),
+        );
+      }
+    } catch {
+      setError('Tax and TDS amounts must be valid numbers.');
+      return;
+    }
+
     const debitParty = DEBIT_PARTY_TYPES.has(voucherType);
     const billType = voucherType === 'Sales' || voucherType === 'Purchase' ? 'New Ref' as const : 'Against Ref' as const;
     const partyLine = compact({
@@ -162,7 +199,7 @@ export function InvoiceEntry({ workspaceId, ledgers, parties, stockItems, onPost
       currency: 'INR',
       billAllocations: [],
       costCenterAllocations: [],
-      taxAllocations: [],
+      taxAllocations,
     };
 
     setSaving(true);

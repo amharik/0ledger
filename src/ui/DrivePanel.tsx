@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getDb } from '@/core/db/db';
 import type { DriveLink } from '@/core/model';
 import {
+  GMAIL_SCOPES,
   createPkcePair,
   buildAuthUrl,
   exchangeAuthorizationCode,
@@ -11,6 +12,10 @@ import {
   revokeToken,
   type DriveTokens,
 } from '@/core/drive/auth';
+import {
+  DEFAULT_GMAIL_QUERY,
+  syncGmailStatements,
+} from '@/core/ingest/gmail';
 import { parseDriveFileId } from '@/core/drive/api';
 import {
   archiveMonthToDrive,
@@ -40,6 +45,19 @@ function monthKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+const DRIVE_ORIGINS = [
+  'https://www.googleapis.com/*',
+  'https://sheets.googleapis.com/*',
+  'https://oauth2.googleapis.com/*',
+  'https://openidconnect.googleapis.com/*',
+];
+const GMAIL_ORIGINS = [...DRIVE_ORIGINS, 'https://gmail.googleapis.com/*'];
+
+async function requestOrigins(origins: string[]): Promise<void> {
+  const granted = await chrome.permissions.request({ origins });
+  if (!granted) throw new Error('Google API host permissions were not granted.');
+}
+
 export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
   const [clientId, setClientId] = useState('');
   const [email, setEmail] = useState<string>();
@@ -55,6 +73,8 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [period, setPeriod] = useState(monthKey());
   const [externalRef, setExternalRef] = useState('');
+  const [gmailQuery, setGmailQuery] = useState(DEFAULT_GMAIL_QUERY);
+  const hasGmailScope = Boolean(tokens?.scope?.includes('gmail.readonly'));
 
   const refresh = useCallback(async () => {
     const db = getDb();
@@ -78,6 +98,7 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
     setError(undefined);
     setNotice(undefined);
     try {
+      await requestOrigins(DRIVE_ORIGINS);
       const trimmed = clientId.trim();
       if (!trimmed) throw new Error('Enter your Google OAuth client ID first.');
       await saveDriveClientId(trimmed);
@@ -122,6 +143,77 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
     }
   }
 
+  async function connectGmail() {
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await requestOrigins(GMAIL_ORIGINS);
+      const trimmed = clientId.trim();
+      if (!trimmed) throw new Error('Enter your Google OAuth client ID first.');
+      await saveDriveClientId(trimmed);
+      const pair = await createPkcePair();
+      const state = randomUrlSafe(24);
+      const redirectUri = chrome.identity.getRedirectURL();
+      const authUrl = buildAuthUrl({
+        clientId: trimmed,
+        redirectUri,
+        challenge: pair.challenge,
+        state,
+        scopes: GMAIL_SCOPES,
+      });
+      const redirect = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true });
+      if (!redirect) throw new Error('Google authorization was cancelled.');
+      const result = parseAuthRedirect(redirect);
+      if (result.state !== state) throw new Error('Google authorization state mismatch.');
+      const exchanged = await exchangeAuthorizationCode({
+        clientId: trimmed,
+        code: result.code,
+        verifier: pair.verifier,
+        redirectUri,
+      });
+      const user = await fetchUserInfo(exchanged.accessToken);
+      const nextTokens: DriveTokens = {
+        ...exchanged,
+        ...(user.email ? { email: user.email } : {}),
+      };
+      await saveDriveTokens(nextTokens);
+      setTokens(nextTokens);
+      setEmail(user.email);
+      setNotice('Gmail read-only access enabled. Gmail API access requires Google verification.');
+      await refresh();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncGmail() {
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const result = await withToken(
+        (token) =>
+          syncGmailStatements(getDb(), workspaceId, {
+            accessToken: token,
+            query: gmailQuery.trim() || DEFAULT_GMAIL_QUERY,
+            maxResults: 25,
+          }),
+        GMAIL_ORIGINS,
+      );
+      const lines = result.batches.reduce((sum, batch) => sum + batch.batch.totalLines, 0);
+      setNotice(
+        `Gmail: scanned ${result.messages} message(s), staged ${lines} line(s) across ${result.batches.length} batch(es)${result.skipped.length ? `, skipped ${result.skipped.length}` : ''}.`,
+      );
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function disconnect() {
     setBusy(true);
     setError(undefined);
@@ -142,7 +234,11 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  async function withToken<T>(action: (token: string) => Promise<T>): Promise<T> {
+  async function withToken<T>(
+    action: (token: string) => Promise<T>,
+    origins: string[] = DRIVE_ORIGINS,
+  ): Promise<T> {
+    await requestOrigins(origins);
     const token = await getDriveAccessToken();
     if (!token) throw new Error('Connect Google Drive first.');
     return action(token);
@@ -318,6 +414,31 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
           ) : null}
         </p>
       ) : null}
+
+      <h3>Gmail statement import</h3>
+      <p className="muted small">
+        Optional read-only Gmail access. Imported statements are staged for review; emails and
+        attachments are not retained. Restricted Gmail scopes may require Google verification.
+      </p>
+      <div className="form-grid">
+        <label>
+          <span>Gmail search query</span>
+          <input
+            value={gmailQuery}
+            onChange={(event) => setGmailQuery(event.target.value)}
+            disabled={!hasGmailScope}
+          />
+        </label>
+      </div>
+      {hasGmailScope ? (
+        <button className="ghost" onClick={() => void syncGmail()} disabled={busy}>
+          Import recent Gmail statements
+        </button>
+      ) : (
+        <button className="ghost" onClick={() => void connectGmail()} disabled={busy || !tokens}>
+          Enable read-only Gmail access
+        </button>
+      )}
 
       <h3>External workbook</h3>
       <p className="muted small">

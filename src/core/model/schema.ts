@@ -298,6 +298,8 @@ export const TaxAllocationInputSchema = z
     rate: decimalString.optional(),
     hsnSac: z.string().max(16).optional(),
     tdsSection: z.string().max(16).optional(),
+    tdsRate: decimalString.optional(),
+    tdsAmountMinor: minorAmount.optional(),
   })
   .strict();
 

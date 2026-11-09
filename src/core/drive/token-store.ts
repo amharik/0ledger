@@ -7,6 +7,8 @@ import {
 const CLIENT_ID_KEY = 'drive.clientId';
 const TOKENS_KEY = 'drive.tokens';
 
+let memoryTokens: DriveTokens | undefined;
+
 export interface StoredDriveAuth {
   clientId: string;
   tokens: DriveTokens;
@@ -26,10 +28,20 @@ export async function getDriveClientId(): Promise<string | undefined> {
 }
 
 export async function saveDriveTokens(tokens: DriveTokens): Promise<void> {
-  await (await getStorage()).set({ [TOKENS_KEY]: tokens });
+  memoryTokens = tokens;
+  const persisted = {
+    accessToken: '',
+    expiresAt: 0,
+    ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
+    ...(tokens.scope ? { scope: tokens.scope } : {}),
+    ...(tokens.tokenType ? { tokenType: tokens.tokenType } : {}),
+    ...(tokens.email ? { email: tokens.email } : {}),
+  };
+  await (await getStorage()).set({ [TOKENS_KEY]: persisted });
 }
 
 export async function getDriveTokens(): Promise<DriveTokens | undefined> {
+  if (memoryTokens) return memoryTokens;
   const value = (await (await getStorage()).get(TOKENS_KEY))[TOKENS_KEY];
   if (!value || typeof value !== 'object') return undefined;
   const tokens = value as DriveTokens;
@@ -38,6 +50,7 @@ export async function getDriveTokens(): Promise<DriveTokens | undefined> {
 }
 
 export async function clearDriveTokens(): Promise<void> {
+  memoryTokens = undefined;
   await (await getStorage()).remove(TOKENS_KEY);
 }
 
@@ -49,10 +62,9 @@ export async function getStoredDriveAuth(): Promise<StoredDriveAuth | undefined>
 }
 
 export async function getDriveAccessToken(): Promise<string | undefined> {
+  if (memoryTokens && isTokenFresh(memoryTokens)) return memoryTokens.accessToken;
   const auth = await getStoredDriveAuth();
-  if (!auth) return undefined;
-  if (isTokenFresh(auth.tokens)) return auth.tokens.accessToken;
-  if (!auth.tokens.refreshToken) return undefined;
+  if (!auth?.tokens.refreshToken) return undefined;
   try {
     const refreshed = await refreshAccessToken({
       clientId: auth.clientId,

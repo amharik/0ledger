@@ -14,6 +14,8 @@ import {
   type NewVoucherInput,
   type StockItem,
   type TallyPrimaryGroup,
+  type TaxAllocationInput,
+  type TaxType,
   type VoucherStatus,
   type VoucherType,
 } from '../model';
@@ -168,6 +170,18 @@ export async function importTallyXml(
     dirty = true;
   }
 
+  function inferTaxType(name: string): TaxType | undefined {
+    const upper = name.toLocaleUpperCase();
+    if (upper.includes('CGST')) return 'CGST';
+    if (upper.includes('SGST')) return 'SGST';
+    if (upper.includes('IGST')) return 'IGST';
+    if (upper.includes('CESS')) return 'CESS';
+    if (upper.includes('TDS')) return 'TDS';
+    if (upper.includes('TCS')) return 'TCS';
+    if (upper.includes('VAT')) return 'VAT';
+    return undefined;
+  }
+
   async function resolveLedger(name: string, parentOverride?: string): Promise<Ledger | undefined> {
     const trimmed = name.trim();
     if (!trimmed) return undefined;
@@ -176,19 +190,33 @@ export async function importTallyXml(
     if (existing) return existing;
     const parentName = parentOverride ?? 'Suspense Account';
     const group = groupByName.get(parentName.trim().toLocaleLowerCase());
+    const taxType = inferTaxType(trimmed);
     const created = await createLedger(db, {
       workspaceId,
       name: trimmed,
       ...(group
         ? { groupId: group.id }
-        : { tallyParent: PRIMARY_SET.has(parentName) ? parentName : 'Suspense Account' }),
+        : {
+            tallyParent:
+              taxType !== undefined
+                ? 'Duties & Taxes'
+                : PRIMARY_SET.has(parentName)
+                  ? parentName
+                  : 'Suspense Account',
+          }),
     });
-    ledgerByName.set(key, created.ledger);
-    ledgerById.set(created.ledger.id, created.ledger);
-    ledgers = [...ledgers, created.ledger];
+    const ledger = taxType
+      ? await db.ledgers
+          .update(created.ledger.id, { isTax: true, taxType })
+          .then(() => db.ledgers.get(created.ledger.id))
+      : created.ledger;
+    if (!ledger) return undefined;
+    ledgerByName.set(key, ledger);
+    ledgerById.set(ledger.id, ledger);
+    ledgers = [...ledgers, ledger];
     result.masters.ledgers += 1;
     dirty = true;
-    return created.ledger;
+    return ledger;
   }
 
   for (const element of tagElements(xml, 'LEDGER')) {
@@ -212,6 +240,7 @@ export async function importTallyXml(
       ...(openingDate ? { openingBalanceDate: openingDate } : {}),
       ...(tagValue(element.inner, 'ISBILLWISEON') === 'Yes' ? { billwise: true } : {}),
     });
+    const taxType = inferTaxType(name);
     const gstin = tagValue(element.inner, 'PARTYGSTIN') ?? tagValue(element.inner, 'GSTIN');
     const bankAccountNo = tagValue(element.inner, 'BANKACCOUNTNUMBER');
     const bankIfsc = tagValue(element.inner, 'IFSCODE');
@@ -225,6 +254,7 @@ export async function importTallyXml(
       bankName,
       creditPeriodDays: Number.isFinite(creditPeriodDays) ? creditPeriodDays : undefined,
       creditLimitMinor,
+      ...(taxType ? { isTax: true, taxType } : {}),
     });
     const ledger = Object.keys(patch).length > 0
       ? await db.ledgers.update(created.ledger.id, patch).then(() => db.ledgers.get(created.ledger.id))
@@ -354,14 +384,23 @@ export async function importTallyXml(
           const center = await resolveCostCenter(centerName);
           costCenterAllocations.push({ costCenterId: center.id, amountMinor: Math.abs(centerAmount) });
         }
+        const taxType = ledger.taxType ?? inferTaxType(ledger.name);
+        const taxAllocations: TaxAllocationInput[] =
+          ledger.isTax && taxType
+            ? [{ ledgerId: ledger.id, taxType, amountMinor: Math.abs(signed) }]
+            : [];
+        const forexAmount = amountValue(tagValue(entry.inner, 'FOREXAMOUNT'), currency);
+        const exchangeRate = tagValue(entry.inner, 'EXCHANGERATE');
         lines.push({
           ledgerId: ledger.id,
           amountMinor: signed,
           currency,
           ...(tagValue(entry.inner, 'NARRATION') ? { narration: tagValue(entry.inner, 'NARRATION')! } : {}),
+          ...(forexAmount !== undefined ? { forexAmountMinor: forexAmount } : {}),
+          ...(exchangeRate ? { exchangeRate } : {}),
           billAllocations,
           costCenterAllocations,
-          taxAllocations: [],
+          taxAllocations,
         });
       }
 
@@ -426,6 +465,18 @@ export async function importTallyXml(
       }
       const partyLedger = partyName ? ledgerByName.get(partyName.trim().toLocaleLowerCase()) : undefined;
       const statusValue = voucherStatus(tagValue(element.inner, 'ISCANCELLED'));
+      const effectiveDate = parseTallyDate(tagValue(element.inner, 'EFFECTIVEDATE'));
+      const invoiceDate = parseTallyDate(tagValue(element.inner, 'VOUCHERINVOICEDATE'));
+      const dueDate = parseTallyDate(tagValue(element.inner, 'DUEDATE'));
+      const creditDays = Number.parseInt(tagValue(element.inner, 'CREDITDAYS') ?? '', 10);
+      const roundOffLedgerName = tagValue(element.inner, 'ROUNDOFFLEDGERNAME');
+      const roundOffLedger = roundOffLedgerName
+        ? await resolveLedger(roundOffLedgerName)
+        : undefined;
+      const roundOffAmount = amountValue(tagValue(element.inner, 'ROUNDOFFAMOUNT'), currency);
+      const guid = tagValue(element.inner, 'GUID');
+      const masterId = tagValue(element.inner, 'MASTERID');
+      const alterId = Number.parseInt(tagValue(element.inner, 'ALTERID') ?? '', 10);
       const base: NewVoucherInput = compact({
         workspaceId,
         voucherType,
@@ -435,6 +486,11 @@ export async function importTallyXml(
         ...(tagValue(element.inner, 'VOUCHERINVOICENUMBER')
           ? { invoiceNumber: tagValue(element.inner, 'VOUCHERINVOICENUMBER') }
           : {}),
+        ...(effectiveDate ? { effectiveDate } : {}),
+        ...(invoiceDate ? { invoiceDate } : {}),
+        ...(dueDate ? { dueDate } : {}),
+        ...(Number.isFinite(creditDays) ? { creditDays } : {}),
+        ...(roundOffLedger ? { roundOffLedgerId: roundOffLedger.id } : {}),
         ...(tagValue(element.inner, 'REFERENCE') ? { reference: tagValue(element.inner, 'REFERENCE') } : {}),
         ...(tagValue(element.inner, 'NARRATION') ? { narration: tagValue(element.inner, 'NARRATION') } : {}),
         ...(tagValue(element.inner, 'PLACEOFSUPPLY')
@@ -450,7 +506,14 @@ export async function importTallyXml(
         sourceRef: ref,
         lines,
         items,
-        tally: { extra: { tallyNumber: number } },
+        tally: compact({
+          guid,
+          masterId,
+          alterId: Number.isFinite(alterId) ? alterId : undefined,
+          roundOffLedgerName,
+          roundOffAmountMinor: roundOffAmount,
+          extra: { tallyNumber: number },
+        }),
       });
       try {
         await postVoucher(db, base);

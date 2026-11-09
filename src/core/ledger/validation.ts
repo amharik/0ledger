@@ -3,6 +3,7 @@ import { assertSafeMinor, sumMinor } from '../money/money';
 import {
   type BillAllocation,
   type CompanyProfile,
+  type ItemLine,
   type Ledger,
   type NewVoucher,
   type NumberingScheme,
@@ -171,6 +172,7 @@ export interface TallyReadinessInput {
   stockItems?: StockItem[];
   vouchers: Voucher[];
   lines: VoucherLine[];
+  itemLines?: ItemLine[];
   billAllocations?: BillAllocation[];
   taxAllocations?: TaxAllocation[];
   numberingSchemes: NumberingScheme[];
@@ -418,16 +420,23 @@ export function checkTallyReadiness(input: TallyReadinessInput): ValidationResul
   }
 
   if (input.stockItems) {
-    for (const voucher of input.vouchers) {
-      // Item lines are validated separately by the posting service; this is a cheap sanity check.
-      void voucher;
-    }
     if (itemIds.size === 0) {
       issues.push({
         code: 'items.empty',
         severity: 'warning',
         message: 'No stock items are defined',
       });
+    }
+    for (const itemLine of input.itemLines ?? []) {
+      if (itemLine.stockItemId && !itemIds.has(itemLine.stockItemId)) {
+        issues.push({
+          code: 'item-line.stock-item-missing',
+          severity: 'error',
+          message: `Voucher item references a missing stock item`,
+          entityType: 'itemLine',
+          entityId: itemLine.id,
+        });
+      }
     }
   }
 

@@ -94,6 +94,7 @@ export default function InterchangePanel({ workspaceId }: { workspaceId: string 
         stockItems: current.stockItems,
         vouchers,
         lines: current.voucherLines.filter((line) => ids.has(line.voucherId)),
+        itemLines: current.itemLines.filter((line) => ids.has(line.voucherId)),
         billAllocations: current.billAllocations.filter((item) => ids.has(item.voucherId)),
         taxAllocations: current.taxAllocations.filter((item) => ids.has(item.voucherId)),
         numberingSchemes: current.numberingSchemes,

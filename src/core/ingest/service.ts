@@ -15,6 +15,12 @@ import {
 import { compact } from '@/core/util/objects';
 import { sha256Hex } from '@/core/util/hash';
 import { cancelVoucher, deleteVoucher, postVoucher } from '@/core/ledger';
+import {
+  MAX_RAW_KEYS,
+  MAX_RAW_KEY_CHARS,
+  MAX_RAW_VALUE_CHARS,
+  assertRowLimit,
+} from './limits';
 import { parseCsvStatement, parsePdfStatement, parseTextStatement, parseXlsxStatement } from './parsers';
 import { parseEmailStatements } from './email';
 import type { IngestFileInput, ParsedStatement, ParsedStatementRow } from './types';
@@ -32,6 +38,21 @@ export interface StageImportResult {
   batch: ImportBatch;
   lines: StatementLine[];
   duplicates: number;
+}
+
+function sanitizeRaw(raw: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  const entries = Object.entries(raw)
+    .slice(0, MAX_RAW_KEYS)
+    .map(([key, value]) => {
+      const safeKey = key.slice(0, MAX_RAW_KEY_CHARS);
+      if (typeof value === 'string') return [safeKey, value.slice(0, MAX_RAW_VALUE_CHARS)] as const;
+      if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+        return [safeKey, value] as const;
+      }
+      return [safeKey, String(value).slice(0, MAX_RAW_VALUE_CHARS)] as const;
+    });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function signature(row: {
@@ -55,6 +76,7 @@ export async function stageImport(
   input: StageImportInput,
 ): Promise<StageImportResult> {
   if (!input.statement.rows.length) throw new Error('Statement has no transaction rows');
+  assertRowLimit(input.statement.rows.length, 'Statement');
 
   const existing = await db.statementLines.where('workspaceId').equals(input.workspaceId).toArray();
   const seen = new Set(existing.map(signature));
@@ -80,13 +102,13 @@ export async function stageImport(
           lineNo: lines.length + 1,
           date: row.date,
           valueDate: row.valueDate,
-          description: row.description,
-          reference: row.reference,
+          description: (row.description.trim() || 'Statement line').slice(0, 1024),
+          reference: row.reference?.trim().slice(0, 256) || undefined,
           debitMinor: row.debitMinor,
           creditMinor: row.creditMinor,
           balanceMinor: row.balanceMinor,
           currency: row.currency,
-          raw: row.raw,
+          raw: sanitizeRaw(row.raw),
           matchStatus: 'unmatched',
           createdAt: now,
           updatedAt: now,
@@ -102,7 +124,7 @@ export async function stageImport(
       id: batchId,
       workspaceId: input.workspaceId,
       source: input.source,
-      fileName: input.fileName,
+      fileName: input.fileName?.slice(0, 512),
       fileSha256: input.fileSha256,
       adapterId: input.statement.adapterId,
       adapterVersion: '1',
@@ -370,7 +392,13 @@ export async function commitImportBatch(
   return { batch: updated, committed, failed, errors };
 }
 
-export async function discardImportBatch(db: LedgerDatabase, batchId: string): Promise<void> {
+export async function discardImportBatch(
+  db: LedgerDatabase,
+  workspaceId: string,
+  batchId: string,
+): Promise<void> {
+  const batch = await db.importBatches.get(batchId);
+  if (!batch || batch.workspaceId !== workspaceId) throw new Error('Import batch not found');
   await db.transaction('rw', [db.importBatches, db.statementLines], async () => {
     await db.statementLines.where('importBatchId').equals(batchId).delete();
     await db.importBatches.delete(batchId);

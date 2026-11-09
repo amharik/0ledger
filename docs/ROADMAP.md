@@ -2,7 +2,7 @@
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Updated: 2026-11-08
+Updated: 2026-11-09
 
 ## M0 — Foundations
 
@@ -79,6 +79,9 @@ Updated: 2026-11-08
 - [x] Adapter SDK + schema + contribution guide
 - [x] Privacy policy, security review, packaging
 - [x] Cross-browser evaluation (Firefox/Safari)
+- [x] Audit hardening: opening stock, stock-journal direction, Drive/CSV formula injection,
+      parser/email/backup limits, raw email minimisation, token storage, stock-reference checks,
+      Gmail UI/scope, GST/TDS capture UI and Tally docs alignment
 
 ## Release gates
 

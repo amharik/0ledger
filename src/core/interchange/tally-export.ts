@@ -25,6 +25,7 @@ function readinessInput(data: WorkbookData, vouchers = data.vouchers.filter((vou
     stockItems: data.stockItems,
     vouchers,
     lines: data.voucherLines.filter((line) => voucherIds.has(line.voucherId)),
+    itemLines: data.itemLines.filter((line) => voucherIds.has(line.voucherId)),
     billAllocations: data.billAllocations.filter((allocation) => voucherIds.has(allocation.voucherId)),
     taxAllocations: data.taxAllocations.filter((allocation) => voucherIds.has(allocation.voucherId)),
     numberingSchemes: data.numberingSchemes,
@@ -150,6 +151,10 @@ function ledgerEntryXml(
     `<AMOUNT>${escapeXml(amount(line.currency, line.amountMinor))}</AMOUNT>`,
   ];
   if (line.narration) parts.push(`<NARRATION>${escapeXml(line.narration)}</NARRATION>`);
+  if (line.forexAmountMinor !== undefined) {
+    parts.push(`<FOREXAMOUNT>${escapeXml(amount(line.currency, line.forexAmountMinor))}</FOREXAMOUNT>`);
+  }
+  if (line.exchangeRate) parts.push(`<EXCHANGERATE>${escapeXml(line.exchangeRate)}</EXCHANGERATE>`);
   for (const bill of bills) {
     parts.push('<BILLALLOCATIONS.LIST>');
     parts.push(`<BILLNAME>${escapeXml(bill.billRef)}</BILLNAME>`);
@@ -224,13 +229,31 @@ function voucherXml(data: WorkbookData, voucherId: string): string {
     `<ISOPTIONAL>${voucher.status === 'optional' ? 'Yes' : 'No'}</ISOPTIONAL>`,
     `<ISCANCELLED>${voucher.status === 'cancelled' ? 'Yes' : 'No'}</ISCANCELLED>`,
   ];
+  if (voucher.effectiveDate) parts.push(`<EFFECTIVEDATE>${tallyDate(voucher.effectiveDate)}</EFFECTIVEDATE>`);
   if (voucher.reference) parts.push(`<REFERENCE>${escapeXml(voucher.reference)}</REFERENCE>`);
   if (voucher.invoiceNumber) parts.push(`<VOUCHERINVOICENUMBER>${escapeXml(voucher.invoiceNumber)}</VOUCHERINVOICENUMBER>`);
+  if (voucher.invoiceDate) parts.push(`<VOUCHERINVOICEDATE>${tallyDate(voucher.invoiceDate)}</VOUCHERINVOICEDATE>`);
+  if (voucher.dueDate) parts.push(`<DUEDATE>${tallyDate(voucher.dueDate)}</DUEDATE>`);
+  if (voucher.creditDays !== undefined) parts.push(`<CREDITDAYS>${voucher.creditDays}</CREDITDAYS>`);
   if (party) parts.push(`<PARTYLEDGERNAME>${escapeXml(party.name)}</PARTYLEDGERNAME>`);
   if (voucher.narration) parts.push(`<NARRATION>${escapeXml(voucher.narration)}</NARRATION>`);
   if (voucher.placeOfSupply) parts.push(`<PLACEOFSUPPLY>${escapeXml(voucher.placeOfSupply)}</PLACEOFSUPPLY>`);
   if (voucher.gstRegistration) parts.push(`<GSTREGISTRATION>${escapeXml(voucher.gstRegistration)}</GSTREGISTRATION>`);
   if (voucher.reverseCharge) parts.push('<REVERSECHARGE>Yes</REVERSECHARGE>');
+  if (voucher.roundOffAmountMinor !== 0) {
+    parts.push(`<ROUNDOFFAMOUNT>${escapeXml(amount(voucher.currency, voucher.roundOffAmountMinor))}</ROUNDOFFAMOUNT>`);
+    const roundOffLedger = voucher.roundOffLedgerId
+      ? ledgerById.get(voucher.roundOffLedgerId)
+      : voucher.tally?.roundOffLedgerName
+        ? { name: voucher.tally.roundOffLedgerName }
+        : undefined;
+    if (roundOffLedger) {
+      parts.push(`<ROUNDOFFLEDGERNAME>${escapeXml(roundOffLedger.name)}</ROUNDOFFLEDGERNAME>`);
+    }
+  }
+  if (voucher.tally?.guid) parts.push(`<GUID>${escapeXml(voucher.tally.guid)}</GUID>`);
+  if (voucher.tally?.masterId) parts.push(`<MASTERID>${escapeXml(voucher.tally.masterId)}</MASTERID>`);
+  if (voucher.tally?.alterId !== undefined) parts.push(`<ALTERID>${voucher.tally.alterId}</ALTERID>`);
 
   for (const line of lines) {
     const ledger = ledgerById.get(line.ledgerId);

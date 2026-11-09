@@ -13,6 +13,7 @@ import {
   type StageImportResult,
 } from '@/core/ingest';
 import { parseTextStatement } from '@/core/ingest/parsers';
+import { MAX_INGEST_BYTES } from '@/core/ingest/limits';
 import { parseAlertText } from '@/core/ingest/email';
 import { formatMinor } from '@/core/money/money';
 
@@ -101,6 +102,11 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     setBusy(true);
     setError(undefined);
     setNotice(undefined);
+    if (file.size > MAX_INGEST_BYTES) {
+      setError('File is too large (max 25 MB).');
+      setBusy(false);
+      return;
+    }
     try {
       const bytes = await file.arrayBuffer();
       const staged = await ingestFile(
@@ -212,7 +218,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     setBusy(true);
     setError(undefined);
     try {
-      await discardImportBatch(getDb(), batchId);
+      await discardImportBatch(getDb(), workspaceId, batchId);
       if (activeBatchId === batchId) setActiveBatchId(undefined);
       setNotice('Import discarded');
       onChanged('Import discarded');

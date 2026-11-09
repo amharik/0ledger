@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
+  MAX_BACKUP_BYTES,
   backupFilename,
   createBackup,
   restoreBackup,
@@ -142,6 +143,11 @@ export default function App() {
     }
     if (restoreMode === 'replace' && !confirmReplace) {
       setError('Confirm that replace mode will erase current local data.');
+      return;
+    }
+
+    if (restoreFile.size > MAX_BACKUP_BYTES) {
+      setError('Backup file is too large (max 50 MB).');
       return;
     }
 

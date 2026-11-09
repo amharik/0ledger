@@ -8,6 +8,11 @@ export const DRIVE_SCOPES = [
   'profile',
 ] as const;
 
+export const GMAIL_SCOPES = [
+  ...DRIVE_SCOPES,
+  'https://www.googleapis.com/auth/gmail.readonly',
+] as const;
+
 export interface DriveTokens {
   accessToken: string;
   refreshToken?: string;

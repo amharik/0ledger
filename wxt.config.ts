@@ -14,6 +14,7 @@ export default defineConfig({
       'https://sheets.googleapis.com/*',
       'https://oauth2.googleapis.com/*',
       'https://openidconnect.googleapis.com/*',
+      'https://gmail.googleapis.com/*',
       'https://mail.google.com/*',
       'https://*.googleusercontent.com/*',
     ],

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BackupError,
+  MAX_PBKDF2_ITERATIONS,
   createBackup,
   createBackupPayload,
   decryptBackup,
@@ -135,6 +136,33 @@ describe('encrypted backup', () => {
     payload.tables.evil = [];
     const envelope = await encryptBackup(payload, PASSWORD, FAST_KDF);
     await expect(restoreBackup(newDb(), envelope, PASSWORD)).rejects.toThrow(/unknown tables/);
+  });
+
+  it('rejects excessive KDF work and malformed salt or IV', async () => {
+    const source = newDb();
+    await seed(source);
+    const envelope = await createBackup(source, PASSWORD, FAST_KDF);
+
+    await expect(
+      decryptBackup(
+        { ...envelope, kdf: { ...envelope.kdf, iterations: MAX_PBKDF2_ITERATIONS + 1 } },
+        PASSWORD,
+      ),
+    ).rejects.toThrow(/KDF/);
+    await expect(
+      decryptBackup({ ...envelope, kdf: { ...envelope.kdf, salt: btoa('short') } }, PASSWORD),
+    ).rejects.toThrow(/salt/);
+    await expect(
+      decryptBackup({ ...envelope, cipher: { ...envelope.cipher, iv: btoa('short') } }, PASSWORD),
+    ).rejects.toThrow(/IV/);
+  });
+
+  it('rejects invalid restored row shapes', async () => {
+    const source = newDb();
+    const payload = await createBackupPayload(source);
+    payload.tables.workspaces = [{ id: 'not-a-valid-workspace' }];
+    const envelope = await encryptBackup(payload, PASSWORD, FAST_KDF);
+    await expect(restoreBackup(newDb(), envelope, PASSWORD)).rejects.toThrow(/invalid row/);
   });
 
   it('rejects short passwords', async () => {

@@ -15,10 +15,17 @@ server-side rendering.
 ## Controls
 
 - Manifest V3; minimum permissions. Google scopes are optional and requested only on connect.
-- OAuth 2.0 PKCE with `drive.file`; refresh token in `chrome.storage.local`.
+- OAuth 2.0 PKCE with `drive.file`; refresh token in `chrome.storage.local`, access token in memory only.
+- Optional Gmail sync requests `gmail.readonly` only after an explicit action; restricted-scope
+  verification is required for public distribution.
 - Money is integer minor units; every voucher must balance to zero.
-- Zod validates imported interchange data and adapter descriptors before use.
-- AES-GCM encrypted backups; key derived from the user passphrase.
+- Zod validates imported interchange data, restored backup rows and adapter descriptors before use.
+- AES-GCM encrypted backups; key derived from the user passphrase, with bounded KDF iterations,
+  ciphertext size and restore record counts.
+- Import limits: 25 MB files/attachments, 5M text characters, 100k statement rows, 200 PDF pages,
+  25 attachments per email.
+- Drive sheet writes use `RAW` values; only typed `formula()` cells are promoted via `USER_ENTERED`,
+  preventing spreadsheet formula injection from statement or voucher text.
 - Tally/Beancount/OFX/CSV import goes through normal voucher validation and numbering.
 - Dedupe checks prevent re-import from silently duplicating vouchers.
 - Scanned PDFs are flagged (`ScannedPdfError`) instead of being guessed from an image.
