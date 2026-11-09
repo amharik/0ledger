@@ -15,6 +15,18 @@ Local-first, double-entry bookkeeping for Indian businesses — in a browser ext
 - **India-aware**: INR + paise integers, FY April–March, 10 major banks, FASTag, GST/TDS capture fields.
 - **Zero float money bugs**: every amount is an integer minor unit; round-off is always explicit.
 
+## Screens
+
+Screenshots use a fictional `Acme Traders` workspace and demo data. No real customer data is shown.
+
+| Dashboard | Reports |
+| --- | --- |
+| ![0ledger dashboard](docs/screenshots/dashboard.png) | ![Trial balance report](docs/screenshots/reports.png) |
+| **Invoice / note** | **Settings** |
+| ![Invoice entry with GST and TDS fields](docs/screenshots/invoice.png) | ![Workspace and chart of accounts settings](docs/screenshots/settings.png) |
+
+See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full set, including statement import and P&L.
+
 ## What it does (target)
 
 1. **Capture** — import `.eml`, capture a webmail message, or optionally sync Gmail.
@@ -80,6 +92,8 @@ src/
 docs/
   PLAN.md           full product/technical plan
   ROADMAP.md        milestone tracker
+  SCREENSHOTS.md    UI screenshot gallery
+  screenshots/      PNG captures used by README and docs
   TALLY.md          Tally XML field mapping
 tests/              Vitest + fixture harness
 ```
