@@ -1,0 +1,143 @@
+{
+  "version": 2,
+  "round": 3,
+  "document": "/home/freeradical/Code/0ledger/docs/designs/autopilot-books-owner-smb.md",
+  "quality_score": 7,
+  "dimensions": {
+    "completeness": "ISSUES",
+    "consistency": "ISSUES",
+    "clarity": "ISSUES",
+    "scope": "PASS",
+    "feasibility": "PASS"
+  },
+  "findings": [
+    {
+      "id": "R3-1",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "Why Now still presents MSME/GST market size, the 2026 AI finance funding trend, and the digital money trail as evidence without citations or hypothesis labels.",
+      "remedy": "Cite sources or label the claims as hypotheses."
+    },
+    {
+      "id": "R3-2",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "What I Noticed About How You Think still calls Close Inbox 'the recommended Close Inbox,' while Approaches Considered marks Approach B as the chosen approach and A only as the fallback.",
+      "remedy": "Correct the wording to match the Approaches Considered section."
+    },
+    {
+      "id": "R3-3",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The Product shape Review bullet still lists only unmatched, low-confidence, missing-document, and tax-sensitive items, while the Exception queue also includes duplicate candidates and unbalanced or incomplete vouchers.",
+      "remedy": "Make the Product shape review list match the Exception queue categories."
+    },
+    {
+      "id": "R3-4",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "What I Noticed still quotes 'manual entry into the books or excel orone,' which remains garbled and obscures the quoted evidence.",
+      "remedy": "Correct the quotation or paraphrase it accurately."
+    },
+    {
+      "id": "R3-5",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The kill criterion triggers only when fewer than 4 of 5 concierge owners hand over statements, while success requires 5 of 5 to hand over without hand-holding. A 4-of-5 result, or 5 of 5 with hand-holding, is neither a kill nor a success, leaving the validation gate undefined in that range.",
+      "remedy": "Use one cohort definition and one hand-holding standard across the risk and success criteria, or define the gray-zone outcome."
+    },
+    {
+      "id": "R3-6",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The risk score's amount-percentile input does not define the cohort or period the percentile is measured against, so its contribution to ordering is ambiguous.",
+      "remedy": "Define the percentile basis, for example the event amount ranked against all events in the same close period."
+    },
+    {
+      "id": "R3-7",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The Auto-post policy sends medium-confidence events (0.70-0.949) to the exception queue, but the Exception queue section lists only 'Low-confidence classifications' and the Product shape Review bullet also says only low-confidence, so the queue's stated contents do not match the confidence bands.",
+      "remedy": "Update the Exception queue and Product shape review wording to include medium-confidence suggestions, or use band labels consistently."
+    },
+    {
+      "id": "R3-8",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": "when auto-post is disabled or the category is off",
+      "problem": "The Post bullet routes high-confidence events to the exception queue only when auto-post is disabled or the category is off. It does not state the destination for high-confidence events that never auto-post regardless of confidence (tax-sensitive, duplicate-suspect, missing-document), and the table's 'off' condition names only the per-category toggle while auto-post also has a global master switch.",
+      "remedy": "State that every high-confidence event that is not auto-posted goes to the exception queue as a suggested posting, and make the table's 'off' condition cover both the global master switch and the per-category toggle."
+    },
+    {
+      "id": "R3-9",
+      "dimension": "consistency",
+      "severity": "blocking",
+      "changed_text": "CA-requested corrections arrive as questions in the CA pack, and the owner applies them.",
+      "problem": "The correction section says CA-requested corrections arrive as questions in the CA pack, but the CA pack's questions are owner-authored 'Questions for CA' (from asked_ca items) that the owner sends out of band to the CA. The pack is generated before the CA sees it and is immutable, so CA-requested corrections cannot arrive in it. The correction loop's actor and direction contradict the defined CA pack.",
+      "remedy": "Describe the CA correction loop in the correct direction: the CA returns corrections out of band, the owner records them as owner items or notes, and the owner posts the reversal. Reserve the CA pack's 'Questions for CA' for owner-to-CA questions."
+    }
+  ],
+  "prior": [
+    {
+      "id": "R2-1",
+      "status": "resolved",
+      "evidence": "The Post bullet now sends high-confidence events to the exception queue as one-tap suggested postings when auto-post is disabled or the category is off, and the 0.95-1.00 table row says 'If off, exception queue as a one-tap suggested posting.'",
+      "current_id": null
+    },
+    {
+      "id": "R2-2",
+      "status": "resolved",
+      "evidence": "The correction section now limits Phase 1 flagging to the owner and says CA-requested corrections arrive as questions the owner applies, removing the CA's exception-queue access.",
+      "current_id": null
+    },
+    {
+      "id": "R2-3",
+      "status": "persisting",
+      "evidence": "Why Now still presents MSME/GST market size, the 2026 AI finance funding trend, and the digital money trail without citations or hypothesis labels.",
+      "current_id": "R3-1"
+    },
+    {
+      "id": "R2-4",
+      "status": "persisting",
+      "evidence": "What I Noticed About How You Think still calls Close Inbox 'the recommended Close Inbox,' while Approaches Considered marks Approach B as the chosen approach and A only as the fallback.",
+      "current_id": "R3-2"
+    },
+    {
+      "id": "R2-5",
+      "status": "persisting",
+      "evidence": "The Product shape Review bullet still lists only unmatched, low-confidence, missing-document, and tax-sensitive items, omitting duplicate candidates and unbalanced or incomplete vouchers.",
+      "current_id": "R3-3"
+    },
+    {
+      "id": "R2-6",
+      "status": "persisting",
+      "evidence": "What I Noticed still quotes 'manual entry into the books or excel orone,' which remains garbled.",
+      "current_id": "R3-4"
+    },
+    {
+      "id": "R2-7",
+      "status": "persisting",
+      "evidence": "The kill criterion still triggers only below 4 of 5 while success still requires 5 of 5 without hand-holding, leaving the gray zone undefined.",
+      "current_id": "R3-5"
+    },
+    {
+      "id": "R2-8",
+      "status": "persisting",
+      "evidence": "The risk score still lists 'Amount percentile: 10 points' without defining the cohort or period the percentile is measured against.",
+      "current_id": "R3-6"
+    },
+    {
+      "id": "R2-9",
+      "status": "persisting",
+      "evidence": "The Exception queue section still lists only 'Low-confidence classifications' and the Product shape Review bullet says only low-confidence, while the Auto-post policy sends medium-confidence events to the queue.",
+      "current_id": "R3-7"
+    }
+  ]
+}

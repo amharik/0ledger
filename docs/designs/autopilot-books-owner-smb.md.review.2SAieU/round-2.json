@@ -1,0 +1,209 @@
+{
+  "version": 2,
+  "round": 2,
+  "document": "/home/freeradical/Code/0ledger/docs/designs/autopilot-books-owner-smb.md",
+  "quality_score": 7,
+  "dimensions": {
+    "completeness": "ISSUES",
+    "consistency": "ISSUES",
+    "clarity": "ISSUES",
+    "scope": "PASS",
+    "feasibility": "PASS"
+  },
+  "findings": [
+    {
+      "id": "R2-1",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": "Auto-post is off by default. Medium and low confidence events go to the exception queue.",
+      "problem": "With auto-post off by default, high-confidence events (0.95-1.00) whose category is not enabled have no defined destination. The Post bullet and the Auto-post policy send only the medium and low bands to the exception queue, so a 0.95+ event is neither auto-posted nor surfaced for review.",
+      "remedy": "State where high-confidence events go when auto-post is disabled or the category toggle is off, for example the exception queue as a one-tap suggested posting."
+    },
+    {
+      "id": "R2-2",
+      "dimension": "consistency",
+      "severity": "blocking",
+      "changed_text": "The owner or CA can flag a posted voucher for correction from the exception queue.",
+      "problem": "The correction section lets the CA flag posted vouchers from the exception queue, but the Phase 1 CA workflow says the CA needs no 0ledger account or workspace access. The CA therefore cannot operate the queue in Phase 1, so the actor and behavior conflict.",
+      "remedy": "Limit flagging to the owner in Phase 1 and route CA-requested corrections through the owner or the CA pack questions, or give the CA an explicit Phase 1 access path."
+    },
+    {
+      "id": "R2-3",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "Why Now still presents MSME/GST market size, the 2026 AI finance funding trend, and the digital money trail as evidence without citations or hypothesis labels.",
+      "remedy": "Cite sources or label the claims as hypotheses."
+    },
+    {
+      "id": "R2-4",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "What I Noticed About How You Think still calls Close Inbox 'the recommended Close Inbox,' while Approaches Considered marks Approach B as the chosen approach and A only as the fallback.",
+      "remedy": "Correct the wording to match the Approaches Considered section."
+    },
+    {
+      "id": "R2-5",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The Product shape Review bullet still lists only unmatched, low-confidence, missing-document, and tax-sensitive items, while the Exception queue also includes duplicate candidates and unbalanced or incomplete vouchers.",
+      "remedy": "Make the Product shape review list match the Exception queue categories."
+    },
+    {
+      "id": "R2-6",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "What I Noticed still quotes 'manual entry into the books or excel orone,' which remains garbled and obscures the quoted evidence.",
+      "remedy": "Correct the quotation or paraphrase it accurately."
+    },
+    {
+      "id": "R2-7",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": "5 of 5 concierge owners hand over statements without hand-holding.",
+      "problem": "The kill criterion triggers only when fewer than 4 of 5 concierge owners hand over statements, while success requires 5 of 5 to hand over without hand-holding. A 4-of-5 result, or 5 of 5 with hand-holding, is neither a kill nor a success, leaving the validation gate undefined in that range.",
+      "remedy": "Use one cohort definition and one hand-holding standard across the risk and success criteria, or define the gray-zone outcome."
+    },
+    {
+      "id": "R2-8",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": "Amount percentile: 10 points.",
+      "problem": "The risk score's amount-percentile input does not define the cohort or period the percentile is measured against, so its contribution to ordering is ambiguous.",
+      "remedy": "Define the percentile basis, for example the event amount ranked against all events in the same close period."
+    },
+    {
+      "id": "R2-9",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": "0.70 to 0.949 | Exception queue, suggested classification. Owner approves.",
+      "problem": "The Auto-post policy sends medium-confidence events (0.70-0.949) to the exception queue, but the Exception queue section lists only 'Low-confidence classifications' and the Product shape Review bullet also says only low-confidence, so the queue's stated contents do not match the confidence bands.",
+      "remedy": "Update the Exception queue and Product shape review wording to include medium-confidence suggestions, or use band labels consistently."
+    }
+  ],
+  "prior": [
+    {
+      "id": "R1-1",
+      "status": "resolved",
+      "evidence": "The Auto-post policy defines the 0-1 scale, the 0.95-1.00 / 0.70-0.949 / 0.00-0.699 bands, the default off, and a global master switch plus per-category toggles.",
+      "current_id": null
+    },
+    {
+      "id": "R1-2",
+      "status": "resolved",
+      "evidence": "The Correction and reversal section specifies a reversal voucher linked by reversesVoucherId, an audit event, editable drafts, flagging for correction, and readiness/CA pack regeneration.",
+      "current_id": null
+    },
+    {
+      "id": "R1-3",
+      "status": "resolved",
+      "evidence": "Ask CA in Phase 1 is a local flag; the item becomes asked_ca, keeps the owner note, appears in the CA pack Questions for CA, and is sent out of band.",
+      "current_id": null
+    },
+    {
+      "id": "R1-4",
+      "status": "resolved",
+      "evidence": "ClassificationRule is a persisted record with pattern, ledger/party, tax hint, confidence, priority, and enabled flag; seed rules ship and the owner can inspect, enable, disable, and edit mappings, and rule changes never rewrite posted vouchers.",
+      "current_id": null
+    },
+    {
+      "id": "R1-5",
+      "status": "resolved",
+      "evidence": "MoneyEvent status values are enumerated: captured, suggested, needs_review, posted, ignored, duplicate.",
+      "current_id": null
+    },
+    {
+      "id": "R1-6",
+      "status": "resolved",
+      "evidence": "CloseItem type, status, and owner values are enumerated, and each item carries an evidence field.",
+      "current_id": null
+    },
+    {
+      "id": "R1-7",
+      "status": "resolved",
+      "evidence": "contentHash is added to MoneyEvent, and duplicate detection hashes the source reference, amount, date, and normalized narration.",
+      "current_id": null
+    },
+    {
+      "id": "R1-8",
+      "status": "resolved",
+      "evidence": "The new tables are registered in the encrypted backup schema and covered by restore tests, and hardening tests include backup/restore of the new tables.",
+      "current_id": null
+    },
+    {
+      "id": "R1-9",
+      "status": "persisting",
+      "evidence": "Why Now still presents MSME/GST market size, the 2026 AI finance funding trend, and the digital money trail without citations or hypothesis labels.",
+      "current_id": "R2-3"
+    },
+    {
+      "id": "R1-10",
+      "status": "resolved",
+      "evidence": "The close cockpit and product shape now show a captured GST/TDS summary and state Phase 1 does not compute a liability or set-aside; the premise and 100x thesis use captured tax position.",
+      "current_id": null
+    },
+    {
+      "id": "R1-11",
+      "status": "resolved",
+      "evidence": "Build sequence uses 10 owner interviews and 5 concierge closes from that group; Success Criteria use 5 of 5 and 3 of 5; Risks use fewer than 4 of the 5; The Assignment uses 5 owners.",
+      "current_id": null
+    },
+    {
+      "id": "R1-12",
+      "status": "persisting",
+      "evidence": "What I Noticed About How You Think still calls Close Inbox 'the recommended Close Inbox,' while Approaches Considered marks Approach B as the chosen approach and A only as the fallback.",
+      "current_id": "R2-4"
+    },
+    {
+      "id": "R1-13",
+      "status": "persisting",
+      "evidence": "The Product shape Review bullet still lists only unmatched, low-confidence, missing-document, and tax-sensitive items, omitting duplicate candidates and unbalanced or incomplete vouchers.",
+      "current_id": "R2-5"
+    },
+    {
+      "id": "R1-14",
+      "status": "resolved",
+      "evidence": "The risk score is defined 0-100 with confidence deficit 40, tax sensitivity 20, missing document 20, duplicate likelihood 10, amount percentile 10, thresholds at 70 and 40, and tie-breakers.",
+      "current_id": null
+    },
+    {
+      "id": "R1-15",
+      "status": "resolved",
+      "evidence": "The readiness score is defined 0-100 with 40/20/20/20 weights, a blocker cap at 60, Ready/Needs review/Not ready thresholds, and a statement that it is not a filing or tax opinion.",
+      "current_id": null
+    },
+    {
+      "id": "R1-16",
+      "status": "resolved",
+      "evidence": "The Phase 1 CA workflow is specified: the owner exports the pack and sends it out of band, and the CA needs no 0ledger account or workspace access.",
+      "current_id": null
+    },
+    {
+      "id": "R1-17",
+      "status": "resolved",
+      "evidence": "Cash position is defined as the ledger bank/cash balance reconciled to the statement, with unreconciled lines shown separately.",
+      "current_id": null
+    },
+    {
+      "id": "R1-18",
+      "status": "resolved",
+      "evidence": "The capture metric is defined as 80% of statement and attachment lines parsed into MoneyEvents without manual entry after the owner supplies the import.",
+      "current_id": null
+    },
+    {
+      "id": "R1-19",
+      "status": "persisting",
+      "evidence": "What I Noticed still quotes 'manual entry into the books or excel orone,' which remains garbled.",
+      "current_id": "R2-6"
+    },
+    {
+      "id": "R1-20",
+      "status": "resolved",
+      "evidence": "Phase 1 capture is local .eml and attachment file import; Gmail API sync is excluded; dependencies say Gmail verification is only required if Gmail is enabled for public distribution, reconciling the no-new-network-calls claim.",
+      "current_id": null
+    }
+  ]
+}

@@ -1,0 +1,176 @@
+{
+  "version": 2,
+  "round": 1,
+  "document": "/home/freeradical/Code/0ledger/docs/designs/autopilot-books-owner-smb.md",
+  "quality_score": 6,
+  "dimensions": {
+    "completeness": "ISSUES",
+    "consistency": "ISSUES",
+    "clarity": "ISSUES",
+    "scope": "PASS",
+    "feasibility": "ISSUES"
+  },
+  "findings": [
+    {
+      "id": "R1-1",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "Auto-post eligibility is undefined. The document never defines the confidence scale, the numeric high-confidence threshold, what happens to medium-confidence events, or whether opt-in is global or per-category (Product shape says 'if the owner enables it,' while AI policy says 'per owner and per category'). Without a threshold the safety-critical auto-post path cannot be implemented.",
+      "remedy": "Define the confidence scale (align it with the existing 0-1 reconciliation confidence), the auto-post threshold and confidence bands (auto-post / exception / review), the default, and the exact opt-in granularity."
+    },
+    {
+      "id": "R1-2",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "There is no correction or reversal path for an incorrectly auto-posted or otherwise posted voucher. The approach relies on an append-only audit and an immutable CA pack, but accounting requires a reversing entry or documented cancellation and a regenerated pack; the exception queue never surfaces errors found in already-posted vouchers.",
+      "remedy": "Specify how posted vouchers are corrected (reversal voucher versus cancellation), who may do it, how it is audited, and how the CA pack and readiness score are regenerated after correction."
+    },
+    {
+      "id": "R1-3",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "'Ask CA' is offered on every exception item, but Phase 1 has no backend, no sync, and no email-in, so the document never says how an item reaches the CA or what the owner sees after asking.",
+      "remedy": "Define the Phase 1 ask-CA behavior (for example, flag the item and include it in the CA pack/export with owner notes, with an explicit out-of-band send) or defer the action to a later phase."
+    },
+    {
+      "id": "R1-4",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "The data-driven rule engine has no persisted rule record or management behavior. ClassificationSuggestion stores a ruleId, but the data model defines no Rule record, no seed rule set, and no way to inspect or edit rules, so 'data-driven' cannot be implemented as specified.",
+      "remedy": "Add a Rule record/store (pattern, ledger/party/tax mapping, confidence, priority, enabled) and specify seeding and owner/CA editing, or state that rules are fixed code constants and remove the data-driven claim."
+    },
+    {
+      "id": "R1-5",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "MoneyEvent.status is listed without enumerated values or transitions, so the capture-to-post lifecycle is not reviewable.",
+      "remedy": "Enumerate the allowed statuses and transitions (for example captured, suggested, posted, needs-review, ignored, duplicate)."
+    },
+    {
+      "id": "R1-6",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "CloseItem lists type, status, and owner without enumerating allowed values, so the close checklist cannot be built consistently.",
+      "remedy": "Enumerate CloseItem types, statuses, and owner values, and link each item to its source evidence."
+    },
+    {
+      "id": "R1-7",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "Duplicate detection depends on a 'content hash,' but MoneyEvent has no content-hash field and the document does not say what is hashed (attachment, email body, or statement line).",
+      "remedy": "Add a contentHash field or define the hash source and how it is computed and compared."
+    },
+    {
+      "id": "R1-8",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The new records are not mentioned in the encrypted backup/restore path. The existing backup validates only tables with registered schemas, so new tables could be restored without validation.",
+      "remedy": "Add the new records to the backup table schemas and include backup/restore of them in the hardening tests."
+    },
+    {
+      "id": "R1-9",
+      "dimension": "completeness",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "Why Now makes uncited market claims (MSME/GST-paying market size, the AI finance funding trend, and the digital money trail) that are not load-bearing for the wedge but are presented as evidence.",
+      "remedy": "Cite sources or label the claims as hypotheses."
+    },
+    {
+      "id": "R1-10",
+      "dimension": "consistency",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "The close cockpit promises to answer 'How much GST/TDS should be set aside?' and the product shape lists a GST/TDS set-aside, but Constraints say GST and TDS are capture-only with 'No return filing or computation.' A computed set-aside is a computation and contradicts the stated constraint and the compliance-risk boundary.",
+      "remedy": "Either restrict the cockpit to a captured-tax summary with no computed liability and rename it, or explicitly commit to a set-aside calculation with its inputs, disclaimers, and review path, and update the Constraints."
+    },
+    {
+      "id": "R1-11",
+      "dimension": "consistency",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "The validation plan's denominator is inconsistent. Build sequence and The Assignment use 5 concierge owners and 10 interviews, while Success Criteria measure '5 of 10 pilot owners' and '3 of 10,' and Risks use 'fewer than 3 of 10.' The document never says whether 5 or 10 owners are piloted or how the 10-owner metrics are measured.",
+      "remedy": "Reconcile the pilot size and define the measured cohort and denominator for every gate (interviews versus concierge closes versus paid pilot), then use those numbers consistently."
+    },
+    {
+      "id": "R1-12",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "'What I Noticed About How You Think' calls Close Inbox 'the recommended Close Inbox,' but Approaches Considered labels Approach B as the chosen approach and never marks A as recommended, so the reader cannot tell what was actually recommended.",
+      "remedy": "Correct the wording to match the Approaches Considered section."
+    },
+    {
+      "id": "R1-13",
+      "dimension": "consistency",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The Product shape Review bullet lists only unmatched, low-confidence, missing-document, and tax-sensitive items, while the Exception queue also includes duplicate candidates and unbalanced or incomplete vouchers, so the owner-facing review scope is inconsistent.",
+      "remedy": "Make the Product shape review list match the Exception queue categories."
+    },
+    {
+      "id": "R1-14",
+      "dimension": "clarity",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "The exception queue 'sorts by risk, not by date,' but risk is never defined, so the primary daily surface has unspecified ordering and the owner cannot know what appears first.",
+      "remedy": "Define the risk score and its inputs (amount, tax sensitivity, missing document, duplicate likelihood, confidence) and the tie-breakers."
+    },
+    {
+      "id": "R1-15",
+      "dimension": "clarity",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "The readiness score is a committed owner-facing signal ('Is the CA pack ready?') but its formula, weights, thresholds, and interpretation are undefined; an unspecified score could give false filing-readiness confidence.",
+      "remedy": "Define the score inputs, weights, thresholds, and display semantics, and state that it is not a filing or tax opinion."
+    },
+    {
+      "id": "R1-16",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "CA-led distribution assumes CA firms with 20 to 50 clients, but Phase 1 is one company per workspace and the multi-client CA workspace is Phase 3; the Phase 1 CA workflow (who installs, who exports, and how packs move between owner and CA) is unspecified.",
+      "remedy": "Describe the Phase 1 CA workflow (the owner exports and sends the pack; the CA does not operate the workspace) or defer CA-led scale to Phase 3."
+    },
+    {
+      "id": "R1-17",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "'How much cash is available?' does not define whether it is the bank statement balance, the ledger cash/bank balance, or a reconciled figure, which matters while lines are unreconciled.",
+      "remedy": "Define the cash-position source and how unreconciled lines are treated."
+    },
+    {
+      "id": "R1-18",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "Success Criteria say 'At least 80% of transactions are captured automatically,' but Phase 1 capture is owner-supplied statement and email import, so 'automatically' is ambiguous (auto-parse after import versus unattended capture).",
+      "remedy": "Define the capture metric in terms of lines parsed without manual entry after an owner-supplied import."
+    },
+    {
+      "id": "R1-19",
+      "dimension": "clarity",
+      "severity": "minor",
+      "changed_text": null,
+      "problem": "The quoted status quo in 'What I Noticed About How You Think' reads 'manual entry into the books or excel orone,' which appears garbled and obscures the quoted evidence.",
+      "remedy": "Correct the quotation or paraphrase it accurately."
+    },
+    {
+      "id": "R1-20",
+      "dimension": "feasibility",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "Phase 1 capture includes 'email attachment import,' but the only existing email path is Gmail sync, which uses restricted scopes, calls the Gmail API, and requires OAuth verification for public distribution. The document treats Gmail verification as a conditional dependency and also claims 'No new network calls in Phase 1,' so the Phase 1 email mechanism and its distribution and privacy implications are unresolved.",
+      "remedy": "Specify the Phase 1 email import mechanism (manual .eml or attachment upload versus Gmail API), account for restricted-scope verification and privacy review if Gmail is used, and reconcile the no-new-network-calls claim."
+    }
+  ],
+  "prior": []
+}
