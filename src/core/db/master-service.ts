@@ -8,6 +8,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from './db';
+import { mirrorEntity, mirrorWorkspace } from './sqlite-mirror';
 import { markDriveDirty } from './sync-state';
 
 export interface PartyView {
@@ -72,6 +73,11 @@ export async function updateParty(
     updatedAt: nowIso(),
   });
   await db.parties.put(updated);
+  try {
+    await mirrorEntity({ kind: 'party', value: updated });
+  } catch {
+    await mirrorWorkspace(db, current.workspaceId);
+  }
   await markDriveDirty(db, current.workspaceId);
   return updated;
 }

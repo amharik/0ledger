@@ -140,6 +140,36 @@ pub fn validate_line_balance(lines: &[VoucherLine]) -> ValidationResult {
     ValidationResult::from_issues(issues)
 }
 
+pub fn validate_round_off(voucher: &Voucher, lines: &[VoucherLine]) -> ValidationResult {
+    let mut issues = Vec::new();
+    match voucher.round_off_ledger_id.as_deref() {
+        None => {
+            if voucher.round_off_amount_minor != 0 {
+                issues.push(ValidationIssue::error(
+                    "voucher.roundoff-ledger-missing",
+                    "Voucher has a round-off amount but no round-off ledger",
+                ));
+            }
+        }
+        Some(ledger_id) => {
+            let posted: i64 = lines
+                .iter()
+                .filter(|line| line.ledger_id == ledger_id)
+                .fold(0_i64, |acc, line| acc.saturating_add(line.amount_minor));
+            if posted != voucher.round_off_amount_minor {
+                issues.push(ValidationIssue::error(
+                    "voucher.roundoff-mismatch",
+                    format!(
+                        "Voucher round-off is {} but lines to ledger {ledger_id} total {posted}",
+                        voucher.round_off_amount_minor
+                    ),
+                ));
+            }
+        }
+    }
+    ValidationResult::from_issues(issues)
+}
+
 pub fn validate_new_voucher(input: &NewVoucher) -> ValidationResult {
     let mut issues = validate_line_balance(&input.lines).issues;
     let voucher = &input.voucher;
@@ -172,12 +202,7 @@ pub fn validate_new_voucher(input: &NewVoucher) -> ValidationResult {
             "Mixed-currency voucher requires an explicit exchange rate on every foreign line",
         ));
     }
-    if voucher.round_off_amount_minor != 0 && voucher.round_off_ledger_id.is_none() {
-        issues.push(ValidationIssue::error(
-            "voucher.roundoff-ledger-missing",
-            "Voucher has a round-off amount but no round-off ledger",
-        ));
-    }
+    issues.extend(validate_round_off(voucher, &input.lines).issues);
     if !is_valid_date(&voucher.date) {
         issues.push(ValidationIssue::error(
             "voucher.invalid-date",
@@ -472,6 +497,27 @@ mod tests {
         let result = validate_line_balance(&[line("l1", 1000), line("l2", -999)]);
         assert!(!result.ok);
         assert!(result.issues.iter().any(|i| i.code == "voucher.unbalanced"));
+    }
+
+    #[test]
+    fn round_off_must_match_posted_line() {
+        let mut v = voucher("vch_1", VoucherType::Journal);
+        v.round_off_amount_minor = 2;
+        v.round_off_ledger_id = Some("led_round".to_string());
+
+        let mut round_line = line("l3", 2);
+        round_line.ledger_id = "led_round".to_string();
+        let lines = vec![line("l1", 1000), line("l2", -1002), round_line];
+        assert!(validate_round_off(&v, &lines).ok);
+
+        let mut tampered = lines.clone();
+        tampered[2].amount_minor = 3;
+        let result = validate_round_off(&v, &tampered);
+        assert!(!result.ok);
+        assert!(result
+            .issues
+            .iter()
+            .any(|i| i.code == "voucher.roundoff-mismatch"));
     }
 
     #[test]

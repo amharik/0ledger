@@ -7,6 +7,11 @@ import {
   type IntegrityReport,
 } from '@/core/db/native-store';
 import { migrateWorkspaceToSqlite } from '@/core/db/migrate-to-sqlite';
+import {
+  mirrorAllWorkspaces,
+  verifyWorkspace,
+  type LedgerVerification,
+} from '@/core/db/sqlite-mirror';
 
 interface EnginePanelProps {
   workspaceId: string;
@@ -18,6 +23,7 @@ export function EnginePanel({ workspaceId }: EnginePanelProps) {
   const [deviceId, setDeviceId] = useState<string>();
   const [schemaVersion, setSchemaVersion] = useState<number>();
   const [integrity, setIntegrity] = useState<IntegrityReport>();
+  const [verification, setVerification] = useState<LedgerVerification>();
   const [syncKey, setSyncKey] = useState<string>();
   const [envelopeOut, setEnvelopeOut] = useState('');
   const [envelopeIn, setEnvelopeIn] = useState('');
@@ -121,6 +127,35 @@ export function EnginePanel({ workspaceId }: EnginePanelProps) {
             disabled={busy}
             onClick={() =>
               void run(async () => {
+                const result = await verifyWorkspace(getDb(), workspaceId);
+                setVerification(result);
+                return result.ok
+                  ? 'SQLite and the local cache agree.'
+                  : `${result.issues.length} divergence(s) found.`;
+              })
+            }
+          >
+            Verify SQLite vs cache
+          </button>
+          <button
+            className="secondary small-button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const summary = await mirrorAllWorkspaces(getDb());
+                return summary
+                  ? `Mirrored ${summary.workspaces} workspace(s), ${summary.ledgers} ledgers, ${summary.vouchers} vouchers.`
+                  : 'Native store unavailable.';
+              })
+            }
+          >
+            Mirror all workspaces
+          </button>
+          <button
+            className="secondary small-button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
                 const report = await nativeStore.integrityCheck(workspaceId);
                 setIntegrity(report);
                 return report.ok
@@ -161,6 +196,20 @@ export function EnginePanel({ workspaceId }: EnginePanelProps) {
                   <li key={`${issue.code}-${index}`}>
                     <strong>{issue.code}</strong>: {issue.message}
                   </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+        {verification ? (
+          <div style={{ marginTop: '0.75rem' }}>
+            <span className={verification.ok ? 'badge positive' : 'badge negative'}>
+              {verification.ok ? 'SQLite matches the cache' : 'SQLite divergence'}
+            </span>
+            {verification.issues.length > 0 ? (
+              <ul className="muted small">
+                {verification.issues.map((issue, index) => (
+                  <li key={`${issue}-${index}`}>{issue}</li>
                 ))}
               </ul>
             ) : null}

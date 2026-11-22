@@ -201,11 +201,12 @@ pub fn parse_amount_to_minor(
     let mut minor = whole * factor;
 
     if minor_unit > 0 && !fraction_part.is_empty() {
-        let mut digits = fraction_part.to_string();
-        // Keep one guard digit so we can round the remainder.
+        // Keep one guard digit beyond the minor unit so we can round. Any
+        // non-zero digits after the guard mean the value is strictly greater
+        // than the half step, which matters for half-even rounding.
         let keep = minor_unit as usize + 1;
-        digits.truncate(keep);
-        let padded = format!("{:0<width$}", digits, width = keep);
+        let head: String = fraction_part.chars().take(keep).collect();
+        let padded = format!("{:0<width$}", head, width = keep);
         let guard = padded
             .chars()
             .last()
@@ -213,11 +214,26 @@ pub fn parse_amount_to_minor(
             .unwrap_or(0);
         let fractional: i128 = padded[..padded.len() - 1].parse().unwrap_or(0);
         minor += fractional;
-        if guard > 0 {
-            let step = 10_i128;
-            let scaled = minor * step + guard as i128;
-            let rounded = round_i128_to_step(scaled, step, mode)?;
-            minor = rounded / step;
+
+        let trailing_non_zero = fraction_part.chars().skip(keep).any(|c| c != '0');
+        if guard > 0 || trailing_non_zero {
+            let round_up = match guard.cmp(&5) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => {
+                    if trailing_non_zero {
+                        true
+                    } else {
+                        match mode {
+                            RoundingMode::HalfUp => true,
+                            RoundingMode::HalfEven => minor % 2 == 1,
+                        }
+                    }
+                }
+            };
+            if round_up {
+                minor += 1;
+            }
         }
     }
 
@@ -225,32 +241,6 @@ pub fn parse_amount_to_minor(
         minor = -minor;
     }
     i64::try_from(minor).map_err(|_| EngineError::AmountOverflow(input.to_string()))
-}
-
-fn round_i128_to_step(value: i128, step: i128, mode: RoundingMode) -> EngineResult<i128> {
-    let remainder = value % step;
-    if remainder == 0 {
-        return Ok(value);
-    }
-    let sign = if value < 0 { -1 } else { 1 };
-    let abs = value.abs();
-    let quotient = abs / step;
-    let rem = abs % step;
-    let half = step / 2;
-    let round_up = if step % 2 == 0 {
-        match rem.cmp(&half) {
-            std::cmp::Ordering::Greater => true,
-            std::cmp::Ordering::Less => false,
-            std::cmp::Ordering::Equal => match mode {
-                RoundingMode::HalfUp => true,
-                RoundingMode::HalfEven => quotient % 2 == 1,
-            },
-        }
-    } else {
-        rem * 2 > step
-    };
-    let rounded = if round_up { quotient + 1 } else { quotient };
-    Ok(rounded * step * sign)
 }
 
 /// Export-friendly decimal string with no grouping or symbol.
@@ -308,6 +298,30 @@ mod tests {
         assert_eq!(
             round_to_step(-105, 10, RoundingMode::HalfEven).unwrap(),
             -100
+        );
+    }
+
+    #[test]
+    fn half_even_considers_digits_after_the_guard() {
+        assert_eq!(
+            parse_amount_to_minor("0.0051", 2, RoundingMode::HalfEven).unwrap(),
+            1
+        );
+        assert_eq!(
+            parse_amount_to_minor("0.0049", 2, RoundingMode::HalfEven).unwrap(),
+            0
+        );
+        assert_eq!(
+            parse_amount_to_minor("1.0051", 2, RoundingMode::HalfEven).unwrap(),
+            101
+        );
+        assert_eq!(
+            parse_amount_to_minor("1.005", 2, RoundingMode::HalfEven).unwrap(),
+            100
+        );
+        assert_eq!(
+            parse_amount_to_minor("1.015", 2, RoundingMode::HalfEven).unwrap(),
+            102
         );
     }
 

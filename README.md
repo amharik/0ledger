@@ -60,7 +60,7 @@ Email / PDF / CSV / XLSX
 
 - **Engine**: portable Rust crates (`crates/engine`, `crates/storage`, `crates/sync`) with no UI or network coupling.
 - **UI & Runtime**: React + TypeScript, Vite, Tauri v2 desktop; Kotlin/Compose and SwiftUI mobile shells.
-- **Storage**: SQLite via `zeroledger-storage` (WAL, migrations, audit chain, change log). Dexie/IndexedDB remains a read-through compatibility mirror while the desktop UI finishes its cutover.
+- **Storage**: SQLite via `zeroledger-storage` (WAL, migrations, audit chain, change log). Dexie/IndexedDB is a write-through cache for screens that have not moved to the native store yet; desktop reports read SQLite when it is available.
 - **Sync**: UI-agnostic, transport-agnostic change envelopes with last-writer-wins conflict resolution.
 - **Parsing**: pdf.js, PapaParse, ExcelJS, postal-mime, client-side OCR.
 - **No remote code**, zero-backend architecture.

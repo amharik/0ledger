@@ -8,6 +8,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from '../db/db';
+import { deleteMirroredEntity, mirrorPostedVoucher } from '../db/sqlite-mirror';
 import { postVoucher, type PostedVoucher } from './post-voucher';
 import { LedgerValidationError, validateNewVoucherInput } from './validation';
 import { buildVoucherChildren, buildVoucherRecord } from './voucher-records';
@@ -132,6 +133,7 @@ export async function updateVoucher(
   );
 
   await markDriveDirty(db, input.workspaceId);
+  await mirrorPostedVoucher(db, { voucher, lines: children.lines });
   return { voucher, ...children };
 }
 
@@ -164,6 +166,8 @@ export async function cancelVoucher(
     await db.auditEvents.add(audit);
   });
   await markDriveDirty(db, existing.workspaceId);
+  const lines = await db.voucherLines.where('voucherId').equals(voucherId).toArray();
+  await mirrorPostedVoucher(db, { voucher: cancelled, lines });
   return cancelled;
 }
 
@@ -216,6 +220,7 @@ export async function deleteVoucher(
     },
   );
   await markDriveDirty(db, existing.workspaceId);
+  await deleteMirroredEntity('voucher', voucherId);
 }
 
 export async function reverseVoucher(

@@ -102,12 +102,20 @@ and from engine types, keeping the engine free of binding concerns.
 
 ### Desktop (Tauri + React)
 
-- `src-tauri/src/engine_commands.rs` exposes the engine over Tauri commands.
+- `src-tauri/src/engine_commands.rs` exposes the engine over Tauri commands,
+  including `store_delete_entity` for tombstoned mirror deletions.
 - `src/core/db/native-store.ts` is the typed `invoke` bridge.
-- `src/core/db/migrate-to-sqlite.ts` migrates Dexie data into SQLite.
-- `src/ui/EnginePanel.tsx` provides diagnostics, migration, backup and sync.
-- Dexie remains a compatibility mirror while the remaining screens finish
-  moving to the native store.
+- `src/core/db/sqlite-mirror.ts` maps Dexie records to the Rust serde contract,
+  builds import bundles, mirrors single entities or whole workspaces, and
+  verifies SQLite against the cache.
+- `src/core/db/sqlite-bootstrap.ts` mirrors all workspaces on desktop launch.
+- `src/core/db/migrate-to-sqlite.ts` reuses the same bundle path for migration.
+- `src/ui/ReportsPanel.tsx` reads trial balance and P&L from SQLite when the
+  native store is available, falling back to Dexie elsewhere.
+- `src/ui/EnginePanel.tsx` provides diagnostics, integrity checks, SQLite/cache
+  verification, migration, backup and sync.
+- Dexie is a write-through cache for screens still on the old path; SQLite is
+  authoritative for the ledger core.
 
 ### Android (Kotlin + Compose)
 
@@ -137,17 +145,21 @@ The engine never chooses a transport and never stores the sync key.
 
 ## Data migration and cutover
 
-1. `native-store.ts` and `EnginePanel` can open the SQLite store today.
-2. `migrate-to-sqlite.ts` copies existing Dexie workspaces into SQLite.
-3. New writes target SQLite; Dexie is kept in sync for screens not yet
-   migrated.
-4. Once every screen uses the native store, Dexie is removed.
+1. Dexie remains the immediate UI cache; every ledger mutation writes through
+   to SQLite via `sqlite-mirror.ts`.
+2. Startup calls `bootstrapSqlite()`, which mirrors every cached workspace.
+   Re-imports are idempotent because SQLite skips unchanged change-log entries.
+3. Voucher updates and deletes are mirrored explicitly; deletes create
+   tombstones in the change log, and referenced ledgers cannot be deleted.
+4. `ReportsPanel` reads trial balance and P&L from SQLite when available;
+   Dexie remains the fallback and still serves screens not yet migrated.
+5. Once every screen uses the native store, Dexie is removed.
 
 The migration is additive: no destructive rewrite of existing user data.
 
 ## Testing and CI
 
-- `cargo test --workspace` — engine, storage and sync (30 tests).
+- `cargo test --workspace` — engine, storage and sync (34 tests).
 - `cargo clippy --workspace --all-targets -- -D warnings`.
 - `cargo fmt --all -- --check`.
 - `npm test`, `npm run test:stress`, `npm run compile`, `npm run build`.

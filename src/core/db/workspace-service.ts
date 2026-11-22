@@ -16,6 +16,7 @@ import {
   type Workspace,
 } from '../model';
 import type { LedgerDatabase } from './db';
+import { mirrorWorkspace } from './sqlite-mirror';
 import { markDriveDirty } from './sync-state';
 import {
   DEFAULT_CLASSIFICATION_RULES,
@@ -215,6 +216,7 @@ export async function createWorkspace(
   );
 
   await markDriveDirty(db, workspaceId);
+  await mirrorWorkspace(db, workspaceId);
   return { workspace, company, groups, ledgers, numberingSchemes };
 }
 

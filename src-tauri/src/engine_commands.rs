@@ -116,6 +116,17 @@ pub fn store_import_bundle(
 }
 
 #[tauri::command]
+pub fn store_delete_entity(
+    state: State<'_, EngineState>,
+    entity_type: String,
+    entity_id: String,
+) -> Result<(), String> {
+    lock(&state)?
+        .delete_entity(&entity_type, &entity_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn store_backup(state: State<'_, EngineState>, path: String) -> Result<(), String> {
     lock(&state)?.backup_to(path).map_err(|e| e.to_string())
 }

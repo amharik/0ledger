@@ -70,14 +70,27 @@ export function parseAmountToMinor(
   const whole = Number.parseInt(wholePart, 10);
   if (!Number.isSafeInteger(whole)) throw new MoneyError(`Amount too large: ${input}`);
 
-  const fraction = fractionPart.padEnd(currency.minorUnit + 1, '0').slice(0, currency.minorUnit + 1);
-  const fractionMinor = Number.parseInt(fraction.slice(0, currency.minorUnit) || '0', 10);
-  const remainder = Number.parseInt(fraction.slice(currency.minorUnit) || '0', 10);
+  const keep = currency.minorUnit + 1;
+  const head = fractionPart.slice(0, keep).padEnd(keep, '0');
+  const fractionMinor = Number.parseInt(head.slice(0, currency.minorUnit) || '0', 10);
+  const guard = Number.parseInt(head.slice(currency.minorUnit) || '0', 10);
+  // Digits after the guard digit decide whether the value is strictly above
+  // half. Ignoring them made half-even round 0.0051 down as if it were 0.005.
+  const trailingNonZero = /[1-9]/.test(fractionPart.slice(keep));
 
   let minor = whole * 10 ** currency.minorUnit + fractionMinor;
-  if (currency.minorUnit > 0 && remainder > 0) {
-    const step = 10 ** (fraction.length - currency.minorUnit);
-    minor = roundToStep(minor * step + remainder, step, mode) / step;
+  if (currency.minorUnit > 0 && (guard > 0 || trailingNonZero)) {
+    let roundUp: boolean;
+    if (guard > 5) {
+      roundUp = true;
+    } else if (guard < 5) {
+      roundUp = false;
+    } else if (trailingNonZero) {
+      roundUp = true;
+    } else {
+      roundUp = mode === 'half-up' ? true : minor % 2 === 1;
+    }
+    if (roundUp) minor += 1;
   }
 
   if (negative) minor = -minor;
@@ -102,22 +115,20 @@ export function roundToStep(
 
   const sign = valueMinor < 0 ? -1 : 1;
   const abs = Math.abs(valueMinor);
-  const quotient = abs / stepMinor;
-  const floor = Math.floor(quotient);
-  const fraction = quotient - floor;
+  const floor = Math.floor(abs / stepMinor);
+  const remainder = abs % stepMinor;
+  const half = Math.floor(stepMinor / 2);
 
-  let roundedCount: number;
-  if (fraction > 0.5) {
-    roundedCount = floor + 1;
-  } else if (fraction < 0.5) {
-    roundedCount = floor;
-  } else if (mode === 'half-up') {
-    roundedCount = floor + 1;
+  let roundUp: boolean;
+  if (stepMinor % 2 === 0) {
+    if (remainder > half) roundUp = true;
+    else if (remainder < half) roundUp = false;
+    else roundUp = mode === 'half-up' ? true : floor % 2 === 1;
   } else {
-    roundedCount = floor % 2 === 0 ? floor : floor + 1;
+    roundUp = remainder * 2 > stepMinor;
   }
 
-  const result = sign * roundedCount * stepMinor;
+  const result = sign * (floor + (roundUp ? 1 : 0)) * stepMinor;
   assertSafeMinor(result, 'rounded amount');
   return result;
 }

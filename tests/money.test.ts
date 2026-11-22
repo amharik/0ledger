@@ -29,6 +29,14 @@ describe('parseAmountToMinor', () => {
     expect(parseAmountToMinor('1.005')).toBe(101);
   });
 
+  it('half-even considers digits after the guard digit', () => {
+    expect(parseAmountToMinor('0.0051', 'INR', 'half-even')).toBe(1);
+    expect(parseAmountToMinor('0.0049', 'INR', 'half-even')).toBe(0);
+    expect(parseAmountToMinor('1.0051', 'INR', 'half-even')).toBe(101);
+    expect(parseAmountToMinor('1.005', 'INR', 'half-even')).toBe(100);
+    expect(parseAmountToMinor('1.015', 'INR', 'half-even')).toBe(102);
+  });
+
   it('rejects malformed input', () => {
     expect(() => parseAmountToMinor('')).toThrow();
     expect(() => parseAmountToMinor('12.3.4')).toThrow();

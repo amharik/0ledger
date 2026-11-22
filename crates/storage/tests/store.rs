@@ -3,8 +3,8 @@ use zeroledger_engine::{
     CompanyProfile, CompanySettings, Ledger, LedgerNature, NewVoucher, TallyPrimaryGroup, Voucher,
     VoucherLine, VoucherSource, VoucherStatus, VoucherType, Workspace,
 };
-use zeroledger_storage::Store;
-use zeroledger_sync::SyncKey;
+use zeroledger_storage::{ImportBundle, Store};
+use zeroledger_sync::{ChangeOp, SyncKey};
 
 fn temp_path(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -273,4 +273,64 @@ fn sync_conflicts_resolve_deterministically() {
 fn schema_version_is_recorded() {
     let store = Store::in_memory_with_device("dev-test").unwrap();
     assert_eq!(store.schema_version().unwrap(), 1);
+}
+
+#[test]
+fn importing_the_same_bundle_twice_does_not_churn_the_change_log() {
+    let store = Store::in_memory_with_device("dev-test").unwrap();
+    let bundle = ImportBundle {
+        workspaces: vec![workspace()],
+        companies: vec![company()],
+        ledgers: vec![
+            ledger(
+                "led_cash",
+                "Cash",
+                TallyPrimaryGroup::CashInHand,
+                LedgerNature::Asset,
+            ),
+            ledger(
+                "led_sales",
+                "Sales",
+                TallyPrimaryGroup::DirectIncome,
+                LedgerNature::Income,
+            ),
+        ],
+        parties: vec![],
+        vouchers: vec![journal("vch_1", 100_000)],
+    };
+
+    store.import_bundle(&bundle).unwrap();
+    let first_count = store.changes_since(0).unwrap().len();
+    store.import_bundle(&bundle).unwrap();
+    let second_count = store.changes_since(0).unwrap().len();
+
+    assert_eq!(first_count, second_count);
+    assert_eq!(store.list_vouchers("ws_test").unwrap().len(), 1);
+}
+
+#[test]
+fn delete_entity_removes_children_and_blocks_referenced_ledgers() {
+    let store = Store::in_memory_with_device("dev-test").unwrap();
+    seed(&store);
+    store.post_voucher(&journal("vch_1", 100_000)).unwrap();
+
+    assert!(store.delete_entity("ledger", "led_cash").is_err());
+
+    store.delete_entity("voucher", "vch_1").unwrap();
+    assert!(store.list_vouchers("ws_test").unwrap().is_empty());
+    assert!(store.list_voucher_lines("ws_test").unwrap().is_empty());
+
+    let changes = store.changes_since(0).unwrap();
+    assert!(changes.iter().any(|change| {
+        change.entity_type == "voucher"
+            && change.entity_id == "vch_1"
+            && change.op == ChangeOp::Delete
+    }));
+
+    store.delete_entity("ledger", "led_cash").unwrap();
+    assert!(store
+        .list_ledgers("ws_test")
+        .unwrap()
+        .iter()
+        .all(|ledger| ledger.id != "led_cash"));
 }

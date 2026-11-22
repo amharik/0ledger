@@ -8,6 +8,7 @@ import {
   type Party,
 } from '../model';
 import type { LedgerDatabase } from './db';
+import { deleteMirroredEntity, mirrorEntity, mirrorWorkspace } from './sqlite-mirror';
 import { markDriveDirty } from './sync-state';
 
 export interface CreateLedgerInput {
@@ -149,6 +150,12 @@ export async function createLedger(
   });
 
   await markDriveDirty(db, input.workspaceId);
+  try {
+    await mirrorEntity({ kind: 'ledger', value: ledger });
+    if (party) await mirrorEntity({ kind: 'party', value: party });
+  } catch {
+    await mirrorWorkspace(db, input.workspaceId);
+  }
   return party ? { ledger, party } : { ledger };
 }
 
@@ -180,6 +187,11 @@ export async function updateLedger(
   const updated = LedgerSchema.parse({ ...current, ...patch });
   await db.ledgers.put(updated);
   await markDriveDirty(db, current.workspaceId);
+  try {
+    await mirrorEntity({ kind: 'ledger', value: updated });
+  } catch {
+    await mirrorWorkspace(db, current.workspaceId);
+  }
   return updated;
 }
 
@@ -197,10 +209,15 @@ export async function removeLedger(
     return 'archived';
   }
 
+  const parties = await db.parties.where('ledgerId').equals(ledgerId).toArray();
   await db.transaction('rw', [db.ledgers, db.parties], async () => {
     await db.parties.where('ledgerId').equals(ledgerId).delete();
     await db.ledgers.delete(ledgerId);
   });
   await markDriveDirty(db, ledger.workspaceId);
+  for (const party of parties) {
+    await deleteMirroredEntity('party', party.id);
+  }
+  await deleteMirroredEntity('ledger', ledgerId);
   return 'deleted';
 }

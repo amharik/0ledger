@@ -526,6 +526,16 @@ impl Store {
                     }
                 }
             }
+            let round_off = zeroledger_engine::validate_round_off(voucher, &voucher_lines);
+            for issue in round_off.issues {
+                if issue.severity == zeroledger_engine::IssueSeverity::Error {
+                    issues.push(IntegrityIssue {
+                        code: issue.code,
+                        message: issue.message,
+                        entity_id: Some(voucher.id.clone()),
+                    });
+                }
+            }
         }
 
         let mut stmt = self.conn.prepare(
@@ -591,6 +601,54 @@ impl Store {
             checked_audit_events,
             issues,
         })
+    }
+
+    /// Delete a mirrored entity and record a tombstone change for sync.
+    ///
+    /// Ledgers that are still referenced by voucher lines are refused so the
+    /// authoritative store cannot be left in a dangling state.
+    pub fn delete_entity(&self, entity_type: &str, entity_id: &str) -> StorageResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        match entity_type {
+            "voucher" => {
+                tx.execute(
+                    "DELETE FROM voucher_lines WHERE voucher_id = ?1",
+                    [entity_id],
+                )?;
+                tx.execute("DELETE FROM vouchers WHERE id = ?1", [entity_id])?;
+            }
+            "ledger" => {
+                let used: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM voucher_lines WHERE ledger_id = ?1",
+                    [entity_id],
+                    |row| row.get(0),
+                )?;
+                if used > 0 {
+                    return Err(StorageError::Validation(format!(
+                        "ledger {entity_id} is still referenced by vouchers"
+                    )));
+                }
+                tx.execute("DELETE FROM ledgers WHERE id = ?1", [entity_id])?;
+            }
+            "party" => {
+                tx.execute("DELETE FROM parties WHERE id = ?1", [entity_id])?;
+            }
+            other => {
+                return Err(StorageError::Validation(format!(
+                    "cannot delete entity type {other}"
+                )))
+            }
+        }
+        record_local_change(
+            &tx,
+            entity_type,
+            entity_id,
+            ChangeOp::Delete,
+            "",
+            &self.device_id,
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Create a consistent, standalone SQLite snapshot at `path`.
@@ -828,6 +886,24 @@ fn record_local_change(
     payload: &str,
     device_id: &str,
 ) -> StorageResult<()> {
+    // Mirroring a whole workspace is idempotent. Skip the change-log entry
+    // when the latest change for this entity already has the same operation
+    // and payload, so repeated imports do not create sync churn.
+    let previous: Option<(String, String)> = conn
+        .query_row(
+            "SELECT op, payload FROM change_log
+             WHERE entity_type = ?1 AND entity_id = ?2
+             ORDER BY lamport DESC, rowid DESC LIMIT 1",
+            params![entity_type, entity_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((previous_op, previous_payload)) = previous {
+        if previous_op == op.as_str() && previous_payload == payload {
+            return Ok(());
+        }
+    }
+
     let lamport = max_lamport(conn)?.saturating_add(1);
     let change = Change::new(
         entity_type,

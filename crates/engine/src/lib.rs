@@ -27,7 +27,8 @@ pub use reports::{
 };
 pub use validation::{
     check_tally_readiness, compute_totals, validate_line_balance, validate_new_voucher,
-    IssueSeverity, TallyReadinessInput, ValidationIssue, ValidationResult, VoucherTotals,
+    validate_round_off, IssueSeverity, TallyReadinessInput, ValidationIssue, ValidationResult,
+    VoucherTotals,
 };
 
 /// Semantic version of the portable engine, surfaced to native shells.

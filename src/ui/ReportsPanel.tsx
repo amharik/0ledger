@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getDb } from '@/core/db/db';
+import { isNativeStoreAvailable, nativeStore } from '@/core/db/native-store';
 import {
   balanceSheet,
   billAging,
@@ -53,9 +54,10 @@ export function ReportsPanel({ workspaceId, refreshToken }: Props) {
     setLoading(true);
     setError(undefined);
     const db = getDb();
+    const useSqlite = isNativeStoreAvailable();
     void Promise.all([
-      trialBalance(db, workspaceId),
-      profitAndLoss(db, workspaceId),
+      useSqlite ? nativeStore.trialBalance(workspaceId) : trialBalance(db, workspaceId),
+      useSqlite ? nativeStore.profitAndLoss(workspaceId) : profitAndLoss(db, workspaceId),
       balanceSheet(db, workspaceId),
       partyOutstanding(db, workspaceId),
       billAging(db, workspaceId, asOf),
@@ -93,7 +95,13 @@ export function ReportsPanel({ workspaceId, refreshToken }: Props) {
             <input type="date" value={asOf} onChange={(event) => setAsOf(event.target.value)} />
           </label>
         ) : (
-          <span className="muted small">{loading ? 'Loading…' : 'live from local ledger'}</span>
+          <span className="muted small">
+            {loading
+              ? 'Loading…'
+              : isNativeStoreAvailable()
+                ? 'live from SQLite engine'
+                : 'live from local ledger'}
+          </span>
         )}
       </div>
 

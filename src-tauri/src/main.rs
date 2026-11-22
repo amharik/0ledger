@@ -111,6 +111,7 @@ fn main() {
             store_integrity_check,
             store_post_voucher,
             store_import_bundle,
+            store_delete_entity,
             store_backup,
             sync_generate_key,
             sync_export_envelope,

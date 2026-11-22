@@ -16,6 +16,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from '../db/db';
+import { mirrorPostedVoucher } from '../db/sqlite-mirror';
 import { markDriveDirty } from '../db/sync-state';
 import { buildVoucherChildren, buildVoucherRecord } from './voucher-records';
 
@@ -275,6 +276,7 @@ export async function postVoucher(
   );
 
   await markDriveDirty(db, input.workspaceId);
+  await mirrorPostedVoucher(db, { voucher: posted, lines });
   return {
     voucher: posted,
     lines,

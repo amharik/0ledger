@@ -1,6 +1,7 @@
 import { newId, nowIso } from '../ids';
 import { markDriveDirty, clearDriveDirty, listDirtyWorkspaces } from '../db/sync-state';
 import type { LedgerDatabase } from '../db/db';
+import { mirrorWorkspace } from '../db/sqlite-mirror';
 import type { DriveLink, Workspace } from '../model';
 import {
   AuditEventSchema,
@@ -618,5 +619,6 @@ export async function restoreDriveSnapshot(
   );
 
   await markDriveDirty(db, workspaceId);
+  await mirrorWorkspace(db, workspaceId);
   return { restored, mode };
 }

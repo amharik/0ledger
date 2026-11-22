@@ -19,6 +19,7 @@ import DrivePanel from '@/ui/DrivePanel';
 import { EnginePanel } from '@/ui/EnginePanel';
 import { ErrorBoundary } from '@/ui/ErrorBoundary';
 import { listParties, listStockItems, type PartyView } from '@/core/db/master-service';
+import { bootstrapSqlite } from '@/core/db/sqlite-bootstrap';
 import type { StockItem } from '@/core/model';
 import { getDb } from '@/core/db/db';
 
@@ -48,6 +49,10 @@ export default function App() {
 
   const workspaceId = bundle?.workspace.id;
   const ledgerList = bundle?.ledgers ?? [];
+
+  useEffect(() => {
+    void bootstrapSqlite().then(() => setRefreshToken((value) => value + 1));
+  }, []);
 
   useEffect(() => {
     if (!workspaceId) return;
