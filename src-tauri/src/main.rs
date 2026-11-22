@@ -32,19 +32,27 @@ fn save_email_eml(req: SaveEmailRequest) -> Result<SavedEmailResult, String> {
 }
 
 #[tauri::command]
-fn imap_test_connection(config: ImapConfig) -> Result<bool, String> {
-    imap_test_connection_impl(config)
+async fn imap_test_connection(config: ImapConfig) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_test_connection_impl(config)
+    })
+    .await
+    .map_err(|e| format!("Connection test task error: {}", e))?
 }
 
 #[tauri::command]
-fn imap_fetch_messages(
+async fn imap_fetch_messages(
     app: tauri::AppHandle,
     config: ImapConfig,
     query: ImapQuery,
 ) -> Result<Vec<ImapMessageResult>, String> {
-    imap_fetch_messages_impl(config, query, Some(&|payload| {
-        let _ = app.emit("mail-sync-progress", payload);
-    }))
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_fetch_messages_impl(config, query, Some(&|payload| {
+            let _ = app.emit("mail-sync-progress", payload);
+        }))
+    })
+    .await
+    .map_err(|e| format!("Mail fetch task error: {}", e))?
 }
 
 fn main() {

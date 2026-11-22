@@ -293,8 +293,42 @@ fn connect_imap(config: &ImapConfig) -> Result<Session<native_tls::TlsStream<std
         .build()
         .map_err(|e| format!("TLS builder error: {}", e))?;
 
-    let client = imap::connect((config.host.as_str(), config.port), &config.host, &tls)
-        .map_err(|e| format!("Could not connect to IMAP server {}:{}: {}", config.host, config.port, e))?;
+    let socket_addrs: Vec<std::net::SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&(config.host.as_str(), config.port))
+        .map_err(|e| format!("DNS resolution failed for {}: {}", config.host, e))?
+        .collect();
+
+    if socket_addrs.is_empty() {
+        return Err(format!("Could not resolve address for {}:{}", config.host, config.port));
+    }
+
+    let timeout = std::time::Duration::from_secs(12);
+    let mut last_err = String::new();
+    let mut connected_stream = None;
+
+    for addr in socket_addrs {
+        match std::net::TcpStream::connect_timeout(&addr, timeout) {
+            Ok(stream) => {
+                connected_stream = Some(stream);
+                break;
+            }
+            Err(e) => {
+                last_err = format!("{}: {}", addr, e);
+            }
+        }
+    }
+
+    let tcp_stream = connected_stream.ok_or_else(|| {
+        format!("Could not connect to {}:{}: {}", config.host, config.port, last_err)
+    })?;
+
+    let _ = tcp_stream.set_read_timeout(Some(std::time::Duration::from_secs(25)));
+    let _ = tcp_stream.set_write_timeout(Some(std::time::Duration::from_secs(15)));
+
+    let tls_stream = tls
+        .connect(&config.host, tcp_stream)
+        .map_err(|e| format!("TLS handshake error with {}:{}: {}", config.host, config.port, e))?;
+
+    let client = imap::Client::new(tls_stream);
 
     let session = client
         .login(&config.username, &config.password)
@@ -401,7 +435,7 @@ pub fn imap_fetch_messages_impl(
     let target_uids: Vec<u32> = if preset == "all" {
         uids_to_inspect.into_iter().take(max_count).collect()
     } else {
-        let inspect_batch_size = (max_count * 5).min(150);
+        let inspect_batch_size = (max_count * 4).min(100);
         let candidate_slice = &uids_to_inspect[..uids_to_inspect.len().min(inspect_batch_size)];
         let mut matched = Vec::new();
 
@@ -409,13 +443,15 @@ pub fn imap_fetch_messages_impl(
             "filtering",
             0,
             candidate_slice.len(),
-            50,
+            45,
             &format!("Scanning {} headers for '{}' preset...", candidate_slice.len(), preset),
         );
 
-        for &uid in candidate_slice {
-            if let Ok(messages) = session.uid_fetch(uid.to_string(), "ENVELOPE") {
+        for chunk in candidate_slice.chunks(25) {
+            let uid_query = chunk.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+            if let Ok(messages) = session.uid_fetch(&uid_query, "ENVELOPE") {
                 for msg in messages.iter() {
+                    let uid = msg.uid.unwrap_or(0);
                     let envelope = msg.envelope();
                     let subject = envelope
                         .and_then(|e| e.subject.as_ref())
@@ -435,7 +471,7 @@ pub fn imap_fetch_messages_impl(
                         })
                         .unwrap_or_default();
 
-                    if matches_preset(preset, subject, &from) {
+                    if matches_preset(preset, subject, &from) && uid > 0 {
                         matched.push(uid);
                         if matched.len() >= max_count {
                             break;

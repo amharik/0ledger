@@ -390,6 +390,25 @@ export async function syncLocalMail(
     const messages = await fetchMailMessages(config, query);
     report.fetched = messages.length;
 
+    if (messages.length === 0) {
+      onProgress?.({
+        stage: 'complete',
+        current: 0,
+        total: 0,
+        percent: 100,
+        message: 'No matching emails found for the selected lookback period and filter.',
+      });
+      return report;
+    }
+
+    onProgress?.({
+      stage: 'filtering',
+      current: 0,
+      total: messages.length,
+      percent: 55,
+      message: `Downloaded ${messages.length} email(s). Now extracting transaction details & vouchers...`,
+    });
+
     // Get company profile and default folders for vault archival
     const company = await db.companies.where('workspaceId').equals(workspaceId).first();
     const companyName = company?.legalName || 'General';
@@ -545,6 +564,17 @@ export async function syncLocalMail(
           });
         } else {
           report.skipped.push({ uid: msg.uid, subject: msg.subject, reason: 'No recognized accounting/alert data' });
+          await db.syncState.put({
+            key: syncKey,
+            value: JSON.stringify({
+              uid: msg.uid,
+              subject: msg.subject,
+              date: msg.date,
+              txns: 0,
+              skipped: true,
+              syncedAt: new Date().toISOString(),
+            }),
+          });
         }
       } catch (err) {
         report.errors.push(`UID ${msg.uid} (${msg.subject}): ${err instanceof Error ? err.message : String(err)}`);

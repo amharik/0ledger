@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getDb } from '@/core/db/db';
 import {
   listMailboxes,
@@ -73,6 +73,37 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
   const [report, setReport] = useState<MailSyncReport | null>(null);
   const [error, setError] = useState<string>();
   const [testResult, setTestResult] = useState<string>();
+
+  // Live activity logs & console
+  const [activityLogs, setActivityLogs] = useState<Array<{
+    id: string;
+    timestamp: string;
+    stage: string;
+    message: string;
+    isError?: boolean;
+  }>>([]);
+  const [showLogs, setShowLogs] = useState<boolean>(true);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+
+  const addLog = (stage: string, message: string, isError = false) => {
+    const time = new Date().toLocaleTimeString();
+    setActivityLogs((prev) => [
+      ...prev.slice(-99),
+      {
+        id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: time,
+        stage,
+        message,
+        isError,
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [activityLogs]);
 
   // Reload bank ledgers
   useEffect(() => {
@@ -174,11 +205,15 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
     setTesting(true);
     setError(undefined);
     setTestResult(undefined);
+    const host = editing ? editHost : activeAccount?.host || 'imap.gmail.com';
+    const port = editing ? editPort : activeAccount?.port || 993;
+    const username = editing ? editUsername : activeAccount?.username || '';
+    addLog('testing', `Testing connection to ${host}:${port} as ${username}...`);
     try {
       const config: ImapConfig = {
-        host: editing ? editHost : activeAccount?.host || 'imap.gmail.com',
-        port: editing ? editPort : activeAccount?.port || 993,
-        username: editing ? editUsername : activeAccount?.username || '',
+        host,
+        port,
+        username,
         password: editing
           ? editPassword
           : activeAccount
@@ -191,9 +226,13 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
         throw new Error('Please enter both your email address and app password.');
       }
       await testMailConnection(config);
-      setTestResult(`✅ Connection successful! Authenticated with ${config.host} as ${config.username}.`);
+      const msg = `✅ Connection successful! Authenticated with ${config.host} as ${config.username}.`;
+      setTestResult(msg);
+      addLog('testing', msg);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const err = e instanceof Error ? e.message : String(e);
+      setError(err);
+      addLog('error', `Connection test failed: ${err}`, true);
     } finally {
       setTesting(false);
     }
@@ -219,8 +258,12 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
       current: 0,
       total: 100,
       percent: 5,
-      message: `Connecting to ${activeAccount.host}...`,
+      message: `Connecting to ${activeAccount.host}:${activeAccount.port}...`,
     });
+    addLog(
+      'connecting',
+      `Connecting to ${activeAccount.host}:${activeAccount.port} for ${activeAccount.username} (Preset: ${preset}, Lookback: ${days} days)...`,
+    );
 
     try {
       const db = getDb();
@@ -242,21 +285,30 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
           limit,
         },
         selectedBankLedgerId || undefined,
-        (p) => setProgress(p),
+        (p) => {
+          setProgress(p);
+          addLog(p.stage, p.message);
+        },
       );
 
       setReport(res);
       if (res.transactionsCreated > 0) {
-        onNotice(
-          `Extracted ${res.transactionsCreated} transaction(s) and archived ${res.attachmentsCreated} .eml audit proof(s)!`,
-        );
+        const msg = `Extracted ${res.transactionsCreated} transaction(s) and archived ${res.attachmentsCreated} .eml audit proof(s)!`;
+        onNotice(msg);
+        addLog('complete', msg);
       } else if (res.fetched === 0) {
-        onNotice('No matching emails found for this filter.');
+        const msg = 'No matching emails found for this filter.';
+        onNotice(msg);
+        addLog('complete', msg);
       } else {
-        onNotice(`Fetched ${res.fetched} email(s). All were already processed or contained no recognized alert data.`);
+        const msg = `Fetched ${res.fetched} email(s). All were already processed or contained no recognized alert data.`;
+        onNotice(msg);
+        addLog('complete', msg);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
+      addLog('error', `Sync error: ${errMsg}`, true);
     } finally {
       setSyncing(false);
     }
@@ -294,36 +346,141 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
       {testResult ? <div className="alert success" style={{ marginTop: '1rem' }}>{testResult}</div> : null}
       {error ? <div className="alert danger" style={{ marginTop: '1rem' }}>{error}</div> : null}
 
-      {/* Running Progress Loader */}
-      {syncing && progress ? (
+      {/* Running Progress Loader & Live Activity Console */}
+      {(syncing || activityLogs.length > 0) ? (
         <div
           style={{
             marginTop: '1rem',
             padding: '1rem',
-            background: 'rgba(59, 130, 246, 0.08)',
-            border: '1px solid #3b82f6',
+            background: syncing ? 'rgba(59, 130, 246, 0.05)' : 'var(--panel)',
+            border: syncing ? '1px solid #3b82f6' : '1px solid var(--border)',
             borderRadius: '8px',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--accent)' }}>
-              🔄 Running Mail Ingestion: {progress.stage.toUpperCase()}
-            </span>
-            <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{progress.percent}%</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              {syncing ? (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: '12px',
+                    height: '12px',
+                    border: '2px solid rgba(59, 130, 246, 0.3)',
+                    borderTopColor: '#3b82f6',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                  }}
+                />
+              ) : (
+                <span style={{ fontSize: '1rem' }}>📜</span>
+              )}
+              <span style={{ fontWeight: 600, fontSize: '0.9rem', color: syncing ? 'var(--accent)' : 'inherit' }}>
+                {syncing
+                  ? `🔄 Mail Ingestion: ${progress?.stage ? progress.stage.toUpperCase() : 'IN PROGRESS'}`
+                  : 'Mail Sync Activity Log'}
+              </span>
+              {syncing && progress ? (
+                <span className="badge info" style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}>
+                  {progress.percent}%
+                </span>
+              ) : null}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="ghost small-button"
+                onClick={() => setShowLogs((v) => !v)}
+                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+              >
+                {showLogs ? 'Hide Console' : `Show Console (${activityLogs.length})`}
+              </button>
+              {activityLogs.length > 0 && !syncing ? (
+                <button
+                  type="button"
+                  className="ghost small-button"
+                  onClick={() => setActivityLogs([])}
+                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                >
+                  Clear Log
+                </button>
+              ) : null}
+            </div>
           </div>
-          <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+
+          {/* Animated Progress Bar */}
+          {syncing && progress ? (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                <div
+                  style={{
+                    width: `${Math.max(progress.percent, 5)}%`,
+                    height: '100%',
+                    background: 'linear-gradient(90deg, #3b82f6, #10b981)',
+                    transition: 'width 0.3s ease',
+                  }}
+                />
+              </div>
+              <p className="muted small" style={{ margin: '0.35rem 0 0 0', fontStyle: 'italic' }}>
+                {progress.message}
+              </p>
+            </div>
+          ) : null}
+
+          {/* Live Activity Console */}
+          {showLogs && activityLogs.length > 0 ? (
             <div
+              ref={logContainerRef}
               style={{
-                width: `${progress.percent}%`,
-                height: '100%',
-                background: 'linear-gradient(90deg, #3b82f6, #10b981)',
-                transition: 'width 0.3s ease',
+                marginTop: '0.5rem',
+                background: '#090d16',
+                color: '#cbd5e1',
+                fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                fontSize: '0.75rem',
+                padding: '0.75rem',
+                borderRadius: '6px',
+                maxHeight: '180px',
+                overflowY: 'auto',
+                lineHeight: '1.6',
+                boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.4)',
               }}
-            />
-          </div>
-          <p className="muted small" style={{ margin: '0.5rem 0 0 0', fontStyle: 'italic' }}>
-            {progress.message}
-          </p>
+            >
+              {activityLogs.map((log) => (
+                <div
+                  key={log.id}
+                  style={{
+                    display: 'flex',
+                    gap: '0.5rem',
+                    color: log.isError
+                      ? '#f87171'
+                      : log.stage === 'complete'
+                        ? '#4ade80'
+                        : log.stage === 'testing'
+                          ? '#a78bfa'
+                          : '#e2e8f0',
+                  }}
+                >
+                  <span style={{ opacity: 0.45, flexShrink: 0 }}>[{log.timestamp}]</span>
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      textTransform: 'uppercase',
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      opacity: 0.75,
+                      padding: '0 0.3rem',
+                      borderRadius: '3px',
+                      background: 'rgba(255,255,255,0.08)',
+                      height: 'fit-content',
+                    }}
+                  >
+                    {log.stage}
+                  </span>
+                  <span style={{ wordBreak: 'break-word' }}>{log.message}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
