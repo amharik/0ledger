@@ -2,6 +2,7 @@ import Papa from 'papaparse';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { parseAmountToMinor } from '@/core/money/money';
 import { detectStatementAdapter, getAdapter } from './adapters';
+import { parseSpecializedStatement } from './specialized';
 import {
   MAX_PDF_PAGES,
   assertByteLimit,
@@ -339,12 +340,16 @@ function resolveAdapter(text: string, options: ParseStatementOptions): Statement
 
 export function parseCsvStatement(text: string, options: ParseStatementOptions = {}): ParsedStatement {
   assertTextLimit(text, 'CSV statement');
+  const adapter = resolveAdapter(text, options);
+  if (['nps', 'ppf', 'interest', 'p2p'].includes(adapter.kind)) {
+    const specialized = parseSpecializedStatement(text, { fileName: options.fileName, kind: adapter.kind });
+    if (specialized && specialized.rows.length > 0) return specialized;
+  }
   const parsed = Papa.parse<string[]>(text, {
     header: false,
     skipEmptyLines: 'greedy',
   });
   assertRowLimit(parsed.data.length, 'CSV statement');
-  const adapter = resolveAdapter(text, options);
   return statementFromRows(rowsFromTable(parsed.data, adapter, options), adapter, options);
 }
 
@@ -478,6 +483,10 @@ export function parseTextRows(text: string, adapter: StatementAdapter, options: 
 
 export function parseTextStatement(text: string, options: ParseStatementOptions = {}): ParsedStatement {
   const adapter = resolveAdapter(text, options);
+  if (['nps', 'ppf', 'interest', 'p2p'].includes(adapter.kind)) {
+    const specialized = parseSpecializedStatement(text, { fileName: options.fileName, kind: adapter.kind });
+    if (specialized && specialized.rows.length > 0) return specialized;
+  }
   return {
     ...statementFromRows(parseTextRows(text, adapter, options), adapter, options),
     sourceText: text,
@@ -494,6 +503,10 @@ export async function parsePdfStatement(
     throw new ScannedPdfError();
   }
   const adapter = resolveAdapter(text, options);
+  if (['nps', 'ppf', 'interest', 'p2p'].includes(adapter.kind)) {
+    const specialized = parseSpecializedStatement(text, { fileName: options.fileName, kind: adapter.kind });
+    if (specialized && specialized.rows.length > 0) return specialized;
+  }
   return {
     ...statementFromRows(parseTextRows(text, adapter, options), adapter, options),
     sourceText: text,

@@ -120,6 +120,10 @@ export async function captureStatementLines(
 
   for (const line of lines) {
     if (line.workspaceId !== workspaceId) throw new Error('Statement line belongs to another workspace');
+    if (line.matchStatus === 'matched' || line.matchStatus === 'ignored') {
+      duplicates += 1;
+      continue;
+    }
     const direction = line.creditMinor > line.debitMinor ? 'in' : 'out';
     const amountMinor = Math.abs(line.creditMinor - line.debitMinor);
     if (amountMinor === 0) continue;
@@ -183,7 +187,9 @@ export async function captureStatementLines(
         direction,
         partyHint: undefined,
         narration: line.description.slice(0, 1024),
-        attachmentId: options?.attachmentId,
+        attachmentId:
+          options?.attachmentId ??
+          (typeof line.raw?.attachmentId === 'string' ? line.raw.attachmentId : undefined),
         confidence: 0,
         status: 'captured',
         createdAt: now,

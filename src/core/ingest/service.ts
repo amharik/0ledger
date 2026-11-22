@@ -3,9 +3,11 @@ import { markDriveDirty } from '@/core/db/sync-state';
 import type { LedgerDatabase } from '@/core/db/db';
 import { newId, nowIso } from '@/core/ids';
 import {
+  AttachmentSchema,
   AuditEventSchema,
   ImportBatchSchema,
   StatementLineSchema,
+  type Attachment,
   type ImportBatch,
   type ImportSource,
   type NewVoucher,
@@ -23,6 +25,7 @@ import {
 } from './limits';
 import { parseCsvStatement, parsePdfStatement, parseTextStatement, parseXlsxStatement } from './parsers';
 import { parseEmailStatements } from './email';
+import { resolveLedgerForAccount } from './accounts';
 import type { IngestFileInput, ParsedStatement, ParsedStatementRow } from './types';
 
 export interface StageImportInput {
@@ -38,6 +41,7 @@ export interface StageImportResult {
   batch: ImportBatch;
   lines: StatementLine[];
   duplicates: number;
+  statement: ParsedStatement;
 }
 
 function sanitizeRaw(raw: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
@@ -78,6 +82,21 @@ export async function stageImport(
   if (!input.statement.rows.length) throw new Error('Statement has no transaction rows');
   assertRowLimit(input.statement.rows.length, 'Statement');
 
+  let accountId = input.accountId;
+  if (!accountId) {
+    const rawAccount = input.statement.rows.find((r) => r.raw?.account)?.raw;
+    if (rawAccount && typeof rawAccount.account === 'string') {
+      const resolved = await resolveLedgerForAccount(db, input.workspaceId, {
+        accountNumberMasked: String(rawAccount.account),
+        accountTail: String(rawAccount.accountTail ?? ''),
+        category: (rawAccount.accountCategory as any) ?? 'bank_account',
+        institution: rawAccount.institution as string | undefined,
+        rawToken: String(rawAccount.account),
+      });
+      if (resolved) accountId = resolved;
+    }
+  }
+
   const existing = await db.statementLines.where('workspaceId').equals(input.workspaceId).toArray();
   const seen = new Set(existing.map(signature));
   const now = nowIso();
@@ -98,7 +117,7 @@ export async function stageImport(
           id: newId('stl'),
           workspaceId: input.workspaceId,
           importBatchId: batchId,
-          accountId: input.accountId,
+          accountId,
           lineNo: lines.length + 1,
           date: row.date,
           valueDate: row.valueDate,
@@ -143,7 +162,7 @@ export async function stageImport(
   });
 
   await markDriveDirty(db, input.workspaceId);
-  return { batch, lines, duplicates };
+  return { batch, lines, duplicates, statement: input.statement };
 }
 
 export async function ingestFile(
@@ -166,12 +185,49 @@ export async function ingestFile(
   const fileSha256 = input.bytes ? await sha256Hex(input.bytes) : await sha256Hex(input.text ?? '');
 
   const statements: ParsedStatement[] = [];
+  let emlAttachmentId: string | undefined;
   if (lower.endsWith('.eml')) {
     if (!input.text && !input.bytes) throw new Error('Email file has no content');
     const password = options.password ?? input.password;
     const result = await parseEmailStatements(input.text ?? input.bytes!, {
       ...(password ? { password } : {}),
     });
+
+    // Store .eml email as an audit attachment in db.attachments
+    const rawBytes =
+      input.bytes instanceof Uint8Array
+        ? input.bytes
+        : input.bytes instanceof ArrayBuffer
+          ? new Uint8Array(input.bytes)
+          : typeof input.text === 'string'
+            ? new TextEncoder().encode(input.text)
+            : new Uint8Array();
+
+    if (rawBytes.byteLength > 0) {
+      const now = nowIso();
+      emlAttachmentId = newId('att');
+      const attachment: Attachment = AttachmentSchema.parse({
+        id: emlAttachmentId,
+        workspaceId,
+        fileName,
+        mimeType: 'message/rfc822',
+        sizeBytes: rawBytes.byteLength,
+        sha256: fileSha256,
+        storageKey: `vault://${workspaceId}/Emails/${fileName}`,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await db.attachments.put(attachment);
+    }
+
+    for (const stmt of result.statements) {
+      for (const row of stmt.rows) {
+        if (emlAttachmentId) {
+          row.raw = { ...row.raw, attachmentId: emlAttachmentId };
+        }
+      }
+    }
+
     statements.push(...result.statements);
   } else if (lower.endsWith('.pdf')) {
     if (!input.bytes) throw new Error('PDF file has no bytes');
@@ -337,13 +393,13 @@ export async function commitImportBatch(
       lines:
         net > 0
           ? [
-              { ledgerId: contra, amountMinor: amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
-              { ledgerId: options.accountId, amountMinor: -amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
-            ]
+            { ledgerId: contra, amountMinor: amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
+            { ledgerId: options.accountId, amountMinor: -amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
+          ]
           : [
-              { ledgerId: options.accountId, amountMinor: amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
-              { ledgerId: contra, amountMinor: -amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
-            ],
+            { ledgerId: options.accountId, amountMinor: amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
+            { ledgerId: contra, amountMinor: -amount, currency: row.currency, billAllocations: [], costCenterAllocations: [], taxAllocations: [] },
+          ],
     };
     try {
       const posted = await postVoucher(db, input, { actor: options.actor ?? 'import' });
@@ -454,3 +510,5 @@ export async function listStatementLines(
 
 export const stage = stageImport;
 export const commit = commitImportBatch;
+export const stageImportFromFile = ingestFile;
+export const stageFileImport = ingestFile;

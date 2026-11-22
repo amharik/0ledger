@@ -1,4 +1,13 @@
-export type StatementKind = 'bank' | 'fastag';
+export type StatementKind =
+  | 'bank'
+  | 'fastag'
+  | 'nps'
+  | 'ppf'
+  | 'interest'
+  | 'p2p'
+  | 'credit_card'
+  | 'gift_card'
+  | 'giftcard';
 
 export interface ParsedStatementRow {
   date: string;

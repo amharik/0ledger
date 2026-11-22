@@ -23,6 +23,10 @@ export interface CreateLedgerInput {
   costCenterApplicable?: boolean;
   notes?: string;
   createPartyMaster?: boolean;
+  bankAccountNo?: string;
+  bankIfsc?: string;
+  bankName?: string;
+  gstin?: string;
 }
 
 export interface UpdateLedgerInput {
@@ -115,6 +119,10 @@ export async function createLedger(
       costCenterApplicable: input.costCenterApplicable ?? false,
       archived: false,
       notes: input.notes,
+      bankAccountNo: input.bankAccountNo?.trim() || undefined,
+      bankIfsc: input.bankIfsc?.trim() || undefined,
+      bankName: input.bankName?.trim() || undefined,
+      gstin: input.gstin?.trim() || undefined,
       createdAt: now,
       updatedAt: now,
     }),

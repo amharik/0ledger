@@ -10,7 +10,7 @@ export const StatementAdapterSchema = z
       .max(64)
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use lowercase words separated by hyphens'),
     name: z.string().min(1).max(128),
-    kind: z.enum(['bank', 'fastag']),
+    kind: z.enum(['bank', 'fastag', 'nps', 'ppf', 'interest', 'p2p', 'credit_card', 'gift_card', 'giftcard']),
     markers: z.array(z.string().min(1).max(128)).default([]),
     filePatterns: z.array(z.string().min(1).max(128)).optional(),
   })
