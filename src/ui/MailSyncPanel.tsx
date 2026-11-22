@@ -50,7 +50,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
   // Editor modal/card state
   const [editing, setEditing] = useState<boolean>(false);
   const [editLabel, setEditLabel] = useState<string>('');
-  const [editProvider, setEditProvider] = useState<'gmail' | 'outlook' | 'yahoo' | 'custom'>('gmail');
+  const [editProvider, setEditProvider] = useState<'gmail' | 'outlook' | 'zoho' | 'yahoo' | 'custom'>('gmail');
   const [editHost, setEditHost] = useState<string>('imap.gmail.com');
   const [editPort, setEditPort] = useState<number>(993);
   const [editUsername, setEditUsername] = useState<string>('');

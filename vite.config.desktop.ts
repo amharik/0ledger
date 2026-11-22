@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': path.resolve('./src'),
@@ -14,7 +15,10 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 1420,
+    host: '0.0.0.0',
+    port: 3000,
     strictPort: true,
+    allowedHosts: true,
+    hmr: false,
   },
 });

@@ -1,11 +1,15 @@
 import { useState, type FormEvent } from 'react';
+import { ArrowRight, Building2, Check, Shield } from 'lucide-react';
 import { getDb } from '@/core/db/db';
 import { createWorkspace, type CreateWorkspaceInput } from '@/core/db/workspace-service';
-import { setActiveWorkspaceId } from './workspace';
+import { createLedger, updateLedger } from '@/core/db/ledger-service';
+import { createStockItem } from '@/core/db/master-service';
+import { postVoucher } from '@/core/ledger';
 import { stageImport } from '@/core/ingest';
 import { parseTextStatement } from '@/core/ingest/parsers';
 import { captureStatementLines } from '@/core/autopilot';
-import { createLedger } from '@/core/db/ledger-service';
+import { defaultBooksBegin } from '@/core/db/defaults';
+import { setActiveWorkspaceId } from './workspace';
 
 export const INDIAN_STATES = [
   { code: '29', name: 'Karnataka' },
@@ -43,7 +47,7 @@ export function OnboardingWizard({ onCompleted, onCancel }: Props) {
   const [name, setName] = useState('');
   const [state, setState] = useState('Karnataka');
   const [gstin, setGstin] = useState('');
-  const [booksBegin, setBooksBegin] = useState('2026-04-01');
+  const [booksBegin, setBooksBegin] = useState(() => defaultBooksBegin());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -51,7 +55,7 @@ export function OnboardingWizard({ onCompleted, onCancel }: Props) {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) {
-      setError('Please enter your business or company name.');
+      setError('Enter your business or company name to continue.');
       return;
     }
     setBusy(true);
@@ -80,49 +84,206 @@ export function OnboardingWizard({ onCompleted, onCancel }: Props) {
     setError(undefined);
     try {
       const db = getDb();
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const monthPrefix = todayIso.slice(0, 7);
+      const fyStart = defaultBooksBegin();
+
       const bundle = await createWorkspace(db, {
         name: 'Acme Traders',
         companyLegalName: 'Acme Traders Private Limited',
         state: 'Karnataka',
         gstin: '29AABCA1234F1Z5',
-        booksBegin: '2026-04-01',
+        booksBegin: fyStart,
       });
       const wsId = bundle.workspace.id;
 
-      // Find Sundry Debtors and Sundry Creditors groups
+      const bankLedger = bundle.ledgers.find((l) => l.isBank);
+      const salesLedger = bundle.ledgers.find((l) => l.name === 'Sales');
+      const purchasesLedger = bundle.ledgers.find((l) => l.name === 'Purchases');
+      const rentLedger = bundle.ledgers.find((l) => l.name === 'Rent');
+      const equityLedger = bundle.ledgers.find((l) => l.name === 'Opening Balance Equity');
       const debtorsGroup = bundle.groups.find((g) => g.primaryGroup === 'Sundry Debtors');
       const creditorsGroup = bundle.groups.find((g) => g.primaryGroup === 'Sundry Creditors');
 
-      if (debtorsGroup) {
-        await createLedger(db, {
+      if (bankLedger && equityLedger) {
+        await updateLedger(db, bankLedger.id, { openingBalanceMinor: 25000000 });
+        await updateLedger(db, equityLedger.id, { openingBalanceMinor: -25000000 });
+      }
+
+      const client = debtorsGroup
+        ? await createLedger(db, {
+            workspaceId: wsId,
+            name: 'Infosys Client Services',
+            groupId: debtorsGroup.id,
+          })
+        : undefined;
+
+      const vendor = creditorsGroup
+        ? await createLedger(db, {
+            workspaceId: wsId,
+            name: 'Apex Cloud Hosting Vendor',
+            groupId: creditorsGroup.id,
+          })
+        : undefined;
+
+      const consultingItem = await createStockItem(db, {
+        workspaceId: wsId,
+        name: 'Managed Operations Retainer',
+        uom: 'MON',
+        hsnSac: '998314',
+        rateMinor: 8500000,
+        valuationMethod: 'weighted-average',
+      });
+
+      if (client && salesLedger) {
+        await postVoucher(db, {
           workspaceId: wsId,
-          name: 'Infosys Client Services',
-          groupId: debtorsGroup.id,
+          voucherType: 'Sales',
+          date: `${monthPrefix}-04`,
+          invoiceNumber: 'INV-2026-104',
+          invoiceDate: `${monthPrefix}-04`,
+          dueDate: `${monthPrefix}-28`,
+          partyLedgerId: client.ledger.id,
+          narration: 'Monthly retainer billing for Infosys Client Services',
+          placeOfSupply: 'Karnataka',
+          status: 'regular',
+          currency: 'INR',
+          source: 'manual',
+          groupIds: [],
+          tags: [],
+          lines: [
+            {
+              ledgerId: client.ledger.id,
+              amountMinor: 8500000,
+              currency: 'INR',
+              billAllocations: [
+                {
+                  billRef: 'INV-2026-104',
+                  billType: 'New Ref',
+                  amountMinor: 8500000,
+                  dueDate: `${monthPrefix}-28`,
+                },
+              ],
+              costCenterAllocations: [],
+              taxAllocations: [],
+            },
+            {
+              ledgerId: salesLedger.id,
+              amountMinor: -8500000,
+              currency: 'INR',
+              billAllocations: [],
+              costCenterAllocations: [],
+              taxAllocations: [],
+            },
+          ],
+          items: [
+            {
+              stockItemId: consultingItem.id,
+              description: consultingItem.name,
+              hsnSac: '998314',
+              quantity: '1',
+              uom: 'MON',
+              rateMinor: 8500000,
+              amountMinor: 8500000,
+              discountMinor: 0,
+              direction: 'out',
+            },
+          ],
         });
       }
 
-      if (creditorsGroup) {
-        await createLedger(db, {
+      if (vendor && purchasesLedger) {
+        await postVoucher(db, {
           workspaceId: wsId,
-          name: 'Apex Cloud Hosting Vendor',
-          groupId: creditorsGroup.id,
+          voucherType: 'Purchase',
+          date: `${monthPrefix}-08`,
+          invoiceNumber: 'APEX-889',
+          invoiceDate: `${monthPrefix}-08`,
+          dueDate: `${monthPrefix}-25`,
+          partyLedgerId: vendor.ledger.id,
+          narration: 'Cloud infrastructure hosting bill',
+          placeOfSupply: 'Karnataka',
+          status: 'regular',
+          currency: 'INR',
+          source: 'manual',
+          groupIds: [],
+          tags: [],
+          lines: [
+            {
+              ledgerId: purchasesLedger.id,
+              amountMinor: 3200000,
+              currency: 'INR',
+              billAllocations: [],
+              costCenterAllocations: [],
+              taxAllocations: [],
+            },
+            {
+              ledgerId: vendor.ledger.id,
+              amountMinor: -3200000,
+              currency: 'INR',
+              billAllocations: [
+                {
+                  billRef: 'APEX-889',
+                  billType: 'New Ref',
+                  amountMinor: 3200000,
+                  dueDate: `${monthPrefix}-25`,
+                },
+              ],
+              costCenterAllocations: [],
+              taxAllocations: [],
+            },
+          ],
+          items: [],
         });
       }
 
-      // Seed sample email statement lines into Money Inbox
+      if (bankLedger && rentLedger) {
+        await postVoucher(db, {
+          workspaceId: wsId,
+          voucherType: 'Payment',
+          date: `${monthPrefix}-05`,
+          narration: 'Bengaluru office lease payment',
+          status: 'regular',
+          currency: 'INR',
+          source: 'manual',
+          groupIds: [],
+          tags: [],
+          lines: [
+            {
+              ledgerId: rentLedger.id,
+              amountMinor: 2800000,
+              currency: 'INR',
+              billAllocations: [],
+              costCenterAllocations: [],
+              taxAllocations: [],
+            },
+            {
+              ledgerId: bankLedger.id,
+              amountMinor: -2800000,
+              currency: 'INR',
+              billAllocations: [],
+              costCenterAllocations: [],
+              taxAllocations: [],
+            },
+          ],
+          items: [],
+        });
+      }
+
       const sampleText = `Date,Description,Debit,Credit,Balance
-2026-11-20,NEFT Cr from Infosys Client Services Inv 104,,85000.00,185000.00
-2026-11-19,UPI/P2M/Swiggy Bangalore Office Pantry,1450.00,,183550.00
-2026-11-18,IMPS to Apex Cloud Hosting Vendor,32000.00,,151550.00
-2026-11-17,FASTag Toll Plaza Electronic City,450.00,,151100.00
-2026-11-16,Bank Quarterly Account Charges,500.00,,150600.00`;
+${monthPrefix}-20,NEFT Cr from Infosys Client Services Inv 104,,85000.00,307000.00
+${monthPrefix}-19,UPI/P2M/Swiggy Bangalore Office Pantry,1450.00,,305550.00
+${monthPrefix}-18,IMPS to Apex Cloud Hosting Vendor,32000.00,,273550.00
+${monthPrefix}-17,NETBANKING AWS Cloud Hosting Services,8900.00,,264650.00
+${monthPrefix}-16,Bank Quarterly Account Charges,500.00,,264150.00`;
 
-      const statement = parseTextStatement(sampleText, { fileName: 'sample-email-statement.csv' });
+      const statement = parseTextStatement(sampleText, { fileName: 'hdfc-november-statement.csv' });
       const staged = await stageImport(db, {
         workspaceId: wsId,
         source: 'email',
         statement,
-        fileName: 'sample-email-statement.csv',
+        fileName: 'hdfc-november-statement.csv',
+        ...(bankLedger ? { accountId: bankLedger.id } : {}),
       });
       await captureStatementLines(db, wsId, staged.batch, staged.lines);
 
@@ -135,102 +296,168 @@ export function OnboardingWizard({ onCompleted, onCancel }: Props) {
   }
 
   return (
-    <div style={{ maxWidth: '720px', margin: '2rem auto', padding: '0 1rem' }}>
-      <div className="card" style={{ padding: '2rem' }}>
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h2 style={{ fontSize: '1.75rem', margin: '0 0 0.5rem 0' }}>Welcome to 0ledger</h2>
-          <p className="muted" style={{ margin: 0, fontSize: '1rem' }}>
-            Local-first accounting and GST ledger for Indian businesses. Secure, offline-first, and zero float bugs.
-          </p>
-        </div>
-
-        {error ? <div className="alert danger" style={{ marginBottom: '1.5rem' }}>{error}</div> : null}
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}>
-          <div>
-            <h3 style={{ fontSize: '1.15rem', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
-              Create Your Company
-            </h3>
-            <form onSubmit={handleCreate}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <label>
-                  Company / Trade Name <span style={{ color: 'var(--danger)' }}>*</span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Acme Enterprises or Sharma & Co."
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', marginTop: '0.25rem' }}
-                  />
-                </label>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  <label>
-                    State (GST Code)
-                    <select
-                      value={state}
-                      onChange={(e) => setState(e.target.value)}
-                      style={{ width: '100%', padding: '0.6rem 0.8rem', marginTop: '0.25rem' }}
-                    >
-                      {INDIAN_STATES.map((s) => (
-                        <option key={s.code} value={s.name}>
-                          {s.name} ({s.code})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    GSTIN <span className="muted small">(Optional)</span>
-                    <input
-                      type="text"
-                      maxLength={15}
-                      placeholder="e.g. 29AABCA1234F1Z5"
-                      value={gstin}
-                      onChange={(e) => setGstin(e.target.value)}
-                      style={{ width: '100%', padding: '0.6rem 0.8rem', marginTop: '0.25rem', textTransform: 'uppercase' }}
-                    />
-                  </label>
-                </div>
-
-                <label>
-                  Books Begin Date
-                  <input
-                    type="date"
-                    value={booksBegin}
-                    onChange={(e) => setBooksBegin(e.target.value)}
-                    style={{ width: '100%', padding: '0.6rem 0.8rem', marginTop: '0.25rem' }}
-                  />
-                </label>
-
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', alignItems: 'center' }}>
-                  <button type="submit" disabled={busy} style={{ flex: 1, padding: '0.75rem' }}>
-                    {busy ? 'Setting up…' : '🚀 Create Company & Launch'}
-                  </button>
-                  {onCancel ? (
-                    <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
-                      Cancel
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </form>
+    <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-4xl items-center justify-center px-4 py-12">
+      <div className="grid w-full grid-cols-1 gap-10 lg:grid-cols-12 lg:items-start">
+        <div className="lg:col-span-5 lg:pt-2">
+          <div className="text-sm font-semibold tracking-tight text-blue-700 dark:text-blue-400">
+            0ledger
           </div>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+            Clean books, ready for your CA.
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+            Import bank statements, approve suggested entries in one click, reconcile GSTR-2B, and
+            export Tally-ready packs. Everything stays private inside your browser.
+          </p>
 
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.5rem', textAlign: 'center' }}>
-            <p className="muted small" style={{ marginBottom: '0.75rem' }}>
-              Want to explore with real sample data first?
+          <ul className="mt-8 space-y-3 text-sm text-slate-700 dark:text-slate-300">
+            <li className="flex items-start gap-2.5">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>Exact paise double-entry engine with automatic Tally chart of accounts</span>
+            </li>
+            <li className="flex items-start gap-2.5">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>Bank statement parsing, autopilot rules, and GSTR-2B ITC matching</span>
+            </li>
+            <li className="flex items-start gap-2.5">
+              <Shield className="mt-0.5 h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" />
+              <span>Zero cloud lock-in with encrypted local backups and Tally XML export</span>
+            </li>
+          </ul>
+
+          <div className="mt-8 border-t border-slate-200 pt-6 dark:border-slate-800">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Want to see live reports and the money inbox right away?
             </p>
             <button
               type="button"
-              className="ghost"
               disabled={busy}
               onClick={() => void handleLoadDemo()}
-              style={{ width: '100%', padding: '0.6rem' }}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              ✨ Load Demo Company (Acme Traders with Sample Inbox & Ledgers)
+              <Building2 className="h-4 w-4 text-slate-500" />
+              <span>{busy ? 'Setting up sample books…' : 'Explore with sample company'}</span>
             </button>
+          </div>
+        </div>
+
+        <div className="lg:col-span-7">
+          <div className="rounded-xl border border-slate-200 bg-white p-6 sm:p-8 dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                  Set up your company
+                </h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  You can add more companies or update GST details anytime.
+                </p>
+              </div>
+              {onCancel ? (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  disabled={busy}
+                  className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+                >
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+
+            {error ? (
+              <div className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+                {error}
+              </div>
+            ) : null}
+
+            <form onSubmit={handleCreate} className="mt-6 space-y-5">
+              <div>
+                <label
+                  htmlFor="company-name"
+                  className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+                >
+                  Company or trade name
+                </label>
+                <input
+                  id="company-name"
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="e.g. Sharma Trading Co."
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="company-state"
+                    className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+                  >
+                    State
+                  </label>
+                  <select
+                    id="company-state"
+                    value={state}
+                    onChange={(e) => setState(e.target.value)}
+                    className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  >
+                    {INDIAN_STATES.map((s) => (
+                      <option key={s.code} value={s.name}>
+                        {s.name} ({s.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="company-gstin"
+                    className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+                  >
+                    GSTIN <span className="font-normal text-slate-400">(optional)</span>
+                  </label>
+                  <input
+                    id="company-gstin"
+                    type="text"
+                    maxLength={15}
+                    placeholder="29AABCA1234F1Z5"
+                    value={gstin}
+                    onChange={(e) => setGstin(e.target.value.toUpperCase())}
+                    className="num-tabular mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 uppercase placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="books-begin"
+                  className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+                >
+                  Books beginning from
+                </label>
+                <input
+                  id="books-begin"
+                  type="date"
+                  value={booksBegin}
+                  onChange={(e) => setBooksBegin(e.target.value)}
+                  className="num-tabular mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500"
+                >
+                  <span>{busy ? 'Creating workspace…' : 'Create company & open ledger'}</span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       </div>

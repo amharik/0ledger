@@ -107,7 +107,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
-function classifyCategory(filename: string, ext: string): string {
+export function classifyAccountingCategory(filename: string, ext: string): string {
   const lower = filename.toLowerCase();
   if (lower.includes('fastag') || lower.includes('toll') || lower.includes('nhai')) {
     return 'Fastag_Tolls';
@@ -140,7 +140,7 @@ function classifyCategory(filename: string, ext: string): string {
   return 'Unclassified';
 }
 
-function currentFinancialYear(date = new Date()): string {
+export function currentFinancialYear(date = new Date()): string {
   const month = date.getMonth() + 1; // 1-12
   const year = date.getFullYear();
   if (month >= 4) {
@@ -149,9 +149,35 @@ function currentFinancialYear(date = new Date()): string {
   return `FY${year - 1}-${String(year).slice(2)}`;
 }
 
-function currentPeriodMonth(date = new Date()): string {
+export function currentPeriodMonth(date = new Date()): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   return `${date.getFullYear()}-${month}`;
+}
+
+export const SUPPORTED_VAULT_EXTENSIONS = new Set([
+  'pdf',
+  'csv',
+  'xlsx',
+  'xls',
+  'eml',
+  'txt',
+  'png',
+  'jpg',
+  'jpeg',
+]);
+
+export function inferMimeFromExtension(ext: string): string {
+  const lower = ext.toLowerCase();
+  if (lower === 'pdf') return 'application/pdf';
+  if (lower === 'csv') return 'text/csv';
+  if (lower === 'xlsx' || lower === 'xls') {
+    return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+  if (lower === 'eml') return 'message/rfc822';
+  if (lower === 'txt') return 'text/plain';
+  if (lower === 'png') return 'image/png';
+  if (lower === 'jpg' || lower === 'jpeg') return 'image/jpeg';
+  return 'application/octet-stream';
 }
 
 export interface IngestCycleResult {
@@ -160,6 +186,41 @@ export interface IngestCycleResult {
   transactionsCreated: number;
   filesOrganized: Array<{ source: string; destination: string }>;
   errors: string[];
+}
+
+export interface VaultHistoryEntry {
+  sha256: string;
+  filename: string;
+  date: string;
+  txns: number;
+  category?: string;
+  destination?: string;
+}
+
+export async function listVaultHistory(db: LedgerDatabase): Promise<VaultHistoryEntry[]> {
+  const rows = await db.syncState
+    .filter((entry) => entry.key.startsWith('vault.file:'))
+    .toArray();
+  const parsed: VaultHistoryEntry[] = [];
+  for (const row of rows) {
+    try {
+      const data = (
+        typeof row.value === 'string' ? JSON.parse(row.value) : row.value
+      ) as Partial<VaultHistoryEntry> | null;
+      if (!data || typeof data !== 'object') continue;
+      parsed.push({
+        sha256: row.key.slice('vault.file:'.length),
+        filename: data.filename ?? 'Unknown file',
+        date: data.date ?? '',
+        txns: typeof data.txns === 'number' ? data.txns : 0,
+        ...(data.category ? { category: data.category } : {}),
+        ...(data.destination ? { destination: data.destination } : {}),
+      });
+    } catch {
+      // ignore malformed syncState entry
+    }
+  }
+  return parsed.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 export async function runFolderIngestionCycle(
@@ -191,15 +252,7 @@ export async function runFolderIngestionCycle(
 
       const base64 = await readFileBase64(file.path);
       const bytes = base64ToUint8Array(base64);
-
-      let mimeType = 'application/octet-stream';
-      if (file.extension === 'pdf') mimeType = 'application/pdf';
-      else if (file.extension === 'csv') mimeType = 'text/csv';
-      else if (file.extension === 'xlsx' || file.extension === 'xls')
-        mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      else if (file.extension === 'eml') mimeType = 'message/rfc822';
-      else if (file.extension === 'png') mimeType = 'image/png';
-      else if (file.extension === 'jpg' || file.extension === 'jpeg') mimeType = 'image/jpeg';
+      const mimeType = inferMimeFromExtension(file.extension);
 
       const stagedList: StageImportResult[] = await ingestFile(
         db,
@@ -221,10 +274,12 @@ export async function runFolderIngestionCycle(
       result.newFilesIngested += 1;
       result.transactionsCreated += txnsForFile;
 
+      const category = classifyAccountingCategory(file.filename, file.extension);
+      let destination: string | undefined;
+
       // Auto-organize into Vault
       if (config.autoOrganize) {
-        const category = classifyCategory(file.filename, file.extension);
-        const destination = await organizeAccountingFile({
+        destination = await organizeAccountingFile({
           source_path: file.path,
           archive_root: config.archiveFolder,
           company_name: companyName,
@@ -243,6 +298,8 @@ export async function runFolderIngestionCycle(
           filename: file.filename,
           date: new Date().toISOString(),
           txns: txnsForFile,
+          category,
+          ...(destination ? { destination } : {}),
         }),
       });
     } catch (e) {
@@ -252,3 +309,84 @@ export async function runFolderIngestionCycle(
 
   return result;
 }
+
+export interface BrowserSelectedFile {
+  file: File;
+  relativePath: string;
+  extension: string;
+  sha256: string;
+  alreadyProcessed: boolean;
+  category: string;
+}
+
+export async function runBrowserFolderIngestion(
+  db: LedgerDatabase,
+  workspaceId: string,
+  companyName: string,
+  config: FolderWatcherConfig,
+  files: BrowserSelectedFile[],
+  password?: string,
+): Promise<IngestCycleResult> {
+  const result: IngestCycleResult = {
+    discovered: files.length,
+    newFilesIngested: 0,
+    transactionsCreated: 0,
+    filesOrganized: [],
+    errors: [],
+  };
+
+  const fy = currentFinancialYear();
+  const period = currentPeriodMonth();
+  const safeCompany = companyName.replace(/[^a-z0-9._-]+/gi, '_') || 'Company';
+
+  for (const item of files) {
+    try {
+      const syncKey = `vault.file:${item.sha256}`;
+      const existing = await db.syncState.get(syncKey);
+      if (existing) {
+        continue;
+      }
+
+      const bytes = await item.file.arrayBuffer();
+      const mimeType = item.file.type || inferMimeFromExtension(item.extension);
+
+      const stagedList: StageImportResult[] = await ingestFile(db, workspaceId, {
+        fileName: item.file.name,
+        mimeType,
+        bytes,
+        ...(password ? { password } : {}),
+      });
+
+      let txnsForFile = 0;
+      for (const staged of stagedList) {
+        const captured = await captureStatementLines(db, workspaceId, staged.batch, staged.lines);
+        txnsForFile += captured.created.length;
+      }
+
+      const category = item.category;
+      const virtualDest = `${config.archiveFolder.replace(/\/+$/, '')}/${safeCompany}/${fy}/${period}/${category}/${item.file.name}`;
+
+      result.newFilesIngested += 1;
+      result.transactionsCreated += txnsForFile;
+      if (config.autoOrganize) {
+        result.filesOrganized.push({ source: item.relativePath, destination: virtualDest });
+      }
+
+      await db.syncState.put({
+        key: syncKey,
+        value: JSON.stringify({
+          filename: item.file.name,
+          date: new Date().toISOString(),
+          txns: txnsForFile,
+          category,
+          destination: virtualDest,
+        }),
+      });
+    } catch (e) {
+      result.errors.push(`${item.file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return result;
+}
+

@@ -11,24 +11,32 @@ import { sha256Hex } from '@/core/util/hash';
 import { storeRawArtifact, processFinancialObservation } from '@/core/canonical/engine';
 import { getDefaultFolders } from './folder-watcher';
 
+export type MailboxProvider = 'gmail' | 'outlook' | 'zoho' | 'yahoo' | 'custom';
+
 export interface ImapConfig {
   host: string;
   port: number;
   username: string;
   password: string;
   mailbox?: string;
+  tls?: boolean;
 }
 
 export interface MailboxAccount {
   id: string;
   label: string;
-  provider: 'gmail' | 'outlook' | 'yahoo' | 'custom';
+  provider: MailboxProvider;
   host: string;
   port: number;
   username: string;
   passwordCipher: string; // obfuscated with workspace salt
   mailbox?: string;
+  tls?: boolean;
   isDefault?: boolean;
+  defaultPreset?: MailPreset;
+  defaultDays?: number;
+  defaultLimit?: number;
+  defaultBankLedgerId?: string;
   lastSyncedAt?: string;
   createdAt?: string;
 }
@@ -50,6 +58,13 @@ export interface ImapMessageResult {
   from: string;
   date: string;
   raw_base64: string;
+}
+
+export interface ImapConnectionTestResult {
+  ok: boolean;
+  mailbox: string;
+  exists?: number;
+  folders: string[];
 }
 
 export interface MailProgressPayload {
@@ -87,6 +102,16 @@ export interface MailSyncReport {
   errors: string[];
 }
 
+export interface MailSyncHistoryEntry {
+  key: string;
+  uid: number;
+  subject: string;
+  date: string;
+  txns: number;
+  skipped?: boolean;
+  syncedAt: string;
+}
+
 export interface SaveEmailRequest {
   archive_root: string;
   company_name: string;
@@ -104,6 +129,43 @@ export interface SavedEmailResult {
   size_bytes: number;
   sha256: string;
 }
+
+export const MAIL_PROVIDER_PRESETS: Record<
+  MailboxProvider,
+  { label: string; host: string; port: number; tls: boolean; helpUrl?: string }
+> = {
+  gmail: {
+    label: 'Gmail / Google Workspace',
+    host: 'imap.gmail.com',
+    port: 993,
+    tls: true,
+    helpUrl: 'https://myaccount.google.com/apppasswords',
+  },
+  outlook: {
+    label: 'Outlook / Microsoft 365',
+    host: 'outlook.office365.com',
+    port: 993,
+    tls: true,
+  },
+  zoho: {
+    label: 'Zoho Mail',
+    host: 'imap.zoho.in',
+    port: 993,
+    tls: true,
+  },
+  yahoo: {
+    label: 'Yahoo Mail',
+    host: 'imap.mail.yahoo.com',
+    port: 993,
+    tls: true,
+  },
+  custom: {
+    label: 'Custom IMAP',
+    host: '',
+    port: 993,
+    tls: true,
+  },
+};
 
 const IMAP_CONFIG_KEY = '0ledger.mail_sync.config';
 const MAILBOXES_KEY = '0ledger.mailboxes';
@@ -241,14 +303,17 @@ export function listMailboxes(workspaceId: string): MailboxAccount[] {
           ? 'gmail'
           : legacy.host.includes('outlook')
             ? 'outlook'
-            : legacy.host.includes('yahoo')
-              ? 'yahoo'
-              : 'custom',
+            : legacy.host.includes('zoho')
+              ? 'zoho'
+              : legacy.host.includes('yahoo')
+                ? 'yahoo'
+                : 'custom',
         host: legacy.host,
         port: legacy.port,
         username: legacy.username,
         passwordCipher: encodePassword(legacy.password, workspaceId),
         mailbox: legacy.mailbox || 'INBOX',
+        tls: legacy.tls ?? legacy.port === 993,
         isDefault: true,
         createdAt: new Date().toISOString(),
       };
@@ -262,34 +327,117 @@ export function listMailboxes(workspaceId: string): MailboxAccount[] {
   return [];
 }
 
-export function saveMailbox(workspaceId: string, account: MailboxAccount, rawPassword?: string): void {
+export async function persistMailboxesToDb(
+  db: LedgerDatabase,
+  workspaceId: string,
+  list: MailboxAccount[],
+): Promise<void> {
+  try {
+    await db.settings.put({
+      key: `${MAILBOXES_KEY}:${workspaceId}`,
+      value: list,
+    });
+  } catch {
+    // Non-fatal if IndexedDB is unavailable in unit tests
+  }
+}
+
+export async function hydrateMailboxesFromDb(
+  db: LedgerDatabase,
+  workspaceId: string,
+): Promise<MailboxAccount[]> {
+  const local = listMailboxes(workspaceId);
+  try {
+    const record = await db.settings.get(`${MAILBOXES_KEY}:${workspaceId}`);
+    const fromDb = Array.isArray(record?.value) ? (record.value as MailboxAccount[]) : [];
+    if (fromDb.length > 0 && local.length === 0) {
+      setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(fromDb));
+      return fromDb;
+    }
+    if (local.length > 0 && fromDb.length === 0) {
+      await persistMailboxesToDb(db, workspaceId, local);
+    }
+    return local.length > 0 ? local : fromDb;
+  } catch {
+    return local;
+  }
+}
+
+export function saveMailbox(
+  workspaceId: string,
+  account: MailboxAccount,
+  rawPassword?: string,
+  db?: LedgerDatabase,
+): void {
   let list: MailboxAccount[] = [];
   try {
     const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
     if (raw) list = JSON.parse(raw);
   } catch {}
 
-  const idx = list.findIndex((m) => m.id === account.id);
+  const nextAccount = { ...account };
+  if (nextAccount.isDefault) {
+    list = list.map((item) => ({ ...item, isDefault: item.id === nextAccount.id }));
+  }
+
+  const idx = list.findIndex((m) => m.id === nextAccount.id);
   if (idx >= 0) {
-    list[idx] = account;
+    list[idx] = nextAccount;
   } else {
     if (list.length === 0 || !list.some((m) => m.isDefault)) {
-      account.isDefault = true;
+      nextAccount.isDefault = true;
     }
-    list.push(account);
+    list.push(nextAccount);
   }
   setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+
+  // Mirror to Dexie settings table when db is supplied so backups preserve IMAP accounts
+  if (db) {
+    void persistMailboxesToDb(db, workspaceId, list);
+  }
 
   // Purge any residual legacy plaintext storage to prevent credential leaks
   removeStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
 
   // Store in native OS keyring if provided
   if (rawPassword) {
-    storeNativePassword(`${workspaceId}:${account.id}`, rawPassword).catch(() => {});
+    storeNativePassword(`${workspaceId}:${nextAccount.id}`, rawPassword).catch(() => {});
   }
 }
 
-export function deleteMailbox(workspaceId: string, id: string): void {
+export function setDefaultMailbox(
+  workspaceId: string,
+  id: string,
+  db?: LedgerDatabase,
+): MailboxAccount[] {
+  const list = listMailboxes(workspaceId).map((item) => ({
+    ...item,
+    isDefault: item.id === id,
+  }));
+  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  if (db) {
+    void persistMailboxesToDb(db, workspaceId, list);
+  }
+  return list;
+}
+
+export function markMailboxSynced(
+  workspaceId: string,
+  id: string,
+  db?: LedgerDatabase,
+): MailboxAccount[] {
+  const now = new Date().toISOString();
+  const list = listMailboxes(workspaceId).map((item) =>
+    item.id === id ? { ...item, lastSyncedAt: now } : item,
+  );
+  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  if (db) {
+    void persistMailboxesToDb(db, workspaceId, list);
+  }
+  return list;
+}
+
+export function deleteMailbox(workspaceId: string, id: string, db?: LedgerDatabase): void {
   let list: MailboxAccount[] = [];
   try {
     const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
@@ -300,6 +448,9 @@ export function deleteMailbox(workspaceId: string, id: string): void {
     list[0]!.isDefault = true;
   }
   setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  if (db) {
+    void persistMailboxesToDb(db, workspaceId, list);
+  }
   deleteNativePassword(`${workspaceId}:${id}`).catch(() => {});
 }
 
@@ -324,18 +475,104 @@ export function saveMailSyncConfig(workspaceId: string, config: ImapConfig): voi
   setStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`, JSON.stringify(config));
 }
 
-export async function testMailConnection(config: ImapConfig): Promise<boolean> {
-  if (!isTauri()) {
-    throw new Error('Mail sync is only available in the 0ledger desktop application.');
+export async function testMailConnectionDetailed(
+  config: ImapConfig,
+): Promise<ImapConnectionTestResult> {
+  if (isTauri()) {
+    const ok = await invoke<boolean>('imap_test_connection', { config });
+    return { ok, mailbox: config.mailbox || 'INBOX', folders: [config.mailbox || 'INBOX'] };
   }
-  return await invoke<boolean>('imap_test_connection', { config });
+
+  const response = await fetch('/api/imap/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    mailbox?: string;
+    exists?: number;
+    folders?: string[];
+  };
+
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `IMAP connection failed (HTTP ${response.status}).`);
+  }
+
+  return {
+    ok: true,
+    mailbox: payload.mailbox || config.mailbox || 'INBOX',
+    ...(typeof payload.exists === 'number' ? { exists: payload.exists } : {}),
+    folders: Array.isArray(payload.folders) && payload.folders.length > 0 ? payload.folders : ['INBOX'],
+  };
 }
 
-export async function fetchMailMessages(config: ImapConfig, query: ImapQuery): Promise<ImapMessageResult[]> {
-  if (!isTauri()) {
+export async function testMailConnection(config: ImapConfig): Promise<boolean> {
+  const result = await testMailConnectionDetailed(config);
+  return result.ok;
+}
+
+export async function fetchMailMessages(
+  config: ImapConfig,
+  query: ImapQuery,
+): Promise<ImapMessageResult[]> {
+  if (isTauri()) {
+    return await invoke<ImapMessageResult[]>('imap_fetch_messages', { config, query });
+  }
+
+  const response = await fetch('/api/imap/fetch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config, query }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    messages?: ImapMessageResult[];
+  };
+
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `Failed to fetch emails from IMAP (HTTP ${response.status}).`);
+  }
+
+  return Array.isArray(payload.messages) ? payload.messages : [];
+}
+
+export async function listRecentMailHistory(
+  db: LedgerDatabase,
+  limit = 20,
+): Promise<MailSyncHistoryEntry[]> {
+  try {
+    const rows = await db.syncState.where('key').startsWith('mail.uid:').toArray();
+    const parsed: MailSyncHistoryEntry[] = [];
+    for (const row of rows) {
+      try {
+        const val = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+        if (val && typeof val === 'object') {
+          const item = val as Record<string, unknown>;
+          parsed.push({
+            key: row.key,
+            uid: Number(item.uid ?? 0),
+            subject: String(item.subject ?? '(No subject)'),
+            date: String(item.date ?? ''),
+            txns: Number(item.txns ?? 0),
+            ...(item.skipped === true ? { skipped: true } : {}),
+            syncedAt: String(item.syncedAt ?? ''),
+          });
+        }
+      } catch {
+        // ignore malformed entry
+      }
+    }
+    return parsed
+      .sort((a, b) => b.syncedAt.localeCompare(a.syncedAt))
+      .slice(0, limit);
+  } catch {
     return [];
   }
-  return await invoke<ImapMessageResult[]>('imap_fetch_messages', { config, query });
 }
 
 export function base64ToUint8Array(base64: string): Uint8Array {
@@ -442,7 +679,7 @@ export async function syncLocalMail(
       stage: 'connecting',
       current: 0,
       total: 100,
-      percent: 5,
+      percent: 12,
       message: `Connecting to ${config.host}:${config.port}...`,
     });
 
@@ -465,10 +702,9 @@ export async function syncLocalMail(
       current: 0,
       total: messages.length,
       percent: 55,
-      message: `Downloaded ${messages.length} email(s). Now extracting transaction details & vouchers...`,
+      message: `Fetched ${messages.length} email(s). Extracting transactions and receipts...`,
     });
 
-    // Get company profile and default folders for vault archival
     const company = await db.companies.where('workspaceId').equals(workspaceId).first();
     const companyName = company?.legalName || 'General';
     const defaults = await getDefaultFolders();
@@ -477,7 +713,10 @@ export async function syncLocalMail(
     const now = new Date();
     const curYear = now.getFullYear();
     const curMonth = String(now.getMonth() + 1).padStart(2, '0');
-    const fy = now.getMonth() >= 3 ? `FY${curYear}-${String(curYear + 1).slice(-2)}` : `FY${curYear - 1}-${String(curYear).slice(-2)}`;
+    const fy =
+      now.getMonth() >= 3
+        ? `FY${curYear}-${String(curYear + 1).slice(-2)}`
+        : `FY${curYear - 1}-${String(curYear).slice(-2)}`;
     const monthStr = `${curYear}-${curMonth}`;
 
     const totalMsgs = messages.length;
@@ -491,7 +730,7 @@ export async function syncLocalMail(
         current: currentIdx,
         total: totalMsgs,
         percent: pct,
-        message: `Processing email ${currentIdx} of ${totalMsgs}: ${msg.subject.slice(0, 45)}...`,
+        message: `Parsing ${currentIdx} of ${totalMsgs}: ${msg.subject.slice(0, 52)}`,
       });
 
       try {
@@ -509,11 +748,9 @@ export async function syncLocalMail(
         let txnsForMsg = 0;
         let attached: { attachmentId: string; filePath: string } | undefined;
 
-        // 1. Try parsing full email with attachments (PDF, CSV, XLSX) or alerts
         try {
           const parsed = await parseEmailStatements(rawBytes);
           if (parsed.statements.length > 0) {
-            // Save .eml to vault as audit attachment
             attached = await saveEmailAttachment(
               db,
               workspaceId,
@@ -593,7 +830,6 @@ export async function syncLocalMail(
             }
           }
         } catch {
-          // Fallback: decode raw text and check parseAlertText
           const text = new TextDecoder().decode(rawBytes.slice(0, 50_000));
           const alertStmt = parseAlertText({ text, subject: msg.subject, from: msg.from });
           if (alertStmt && alertStmt.rows.length > 0) {
@@ -686,7 +922,11 @@ export async function syncLocalMail(
             }),
           });
         } else {
-          report.skipped.push({ uid: msg.uid, subject: msg.subject, reason: 'No recognized accounting/alert data' });
+          report.skipped.push({
+            uid: msg.uid,
+            subject: msg.subject,
+            reason: 'No recognized accounting/alert data',
+          });
           await db.syncState.put({
             key: syncKey,
             value: JSON.stringify({
@@ -700,7 +940,9 @@ export async function syncLocalMail(
           });
         }
       } catch (err) {
-        report.errors.push(`UID ${msg.uid} (${msg.subject}): ${err instanceof Error ? err.message : String(err)}`);
+        report.errors.push(
+          `UID ${msg.uid} (${msg.subject}): ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -709,7 +951,7 @@ export async function syncLocalMail(
       current: totalMsgs,
       total: totalMsgs,
       percent: 100,
-      message: `Sync complete. ${report.transactionsCreated} transaction(s) captured, ${report.attachmentsCreated} attachment(s) archived.`,
+      message: `Sync complete. ${report.transactionsCreated} transaction(s) captured, ${report.attachmentsCreated} .eml proof(s) archived.`,
     });
   } finally {
     if (unlistenProgress) {

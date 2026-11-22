@@ -1,67 +1,57 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { AlertTriangle, RotateCcw } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
   fallbackTitle?: string;
-  onReset?: () => void;
 }
 
 interface State {
   hasError: boolean;
-  error?: Error | undefined;
+  error: Error | null;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  public override state: State = {
+    hasError: false,
+    error: null,
+  };
 
-  static getDerivedStateFromError(error: Error): State {
+  public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+  public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('ErrorBoundary caught error:', error, errorInfo);
   }
 
-  handleReset = (): void => {
-    this.setState({ hasError: false, error: undefined });
-    this.props.onReset?.();
-  };
-
-  override render(): ReactNode {
+  public override render() {
     if (this.state.hasError) {
       return (
-        <section className="card" style={{ padding: '2rem', border: '1px solid #ef4444' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-            <span style={{ fontSize: '1.5rem' }}>⚠️</span>
-            <h3 style={{ margin: 0, color: '#ef4444' }}>
-              {this.props.fallbackTitle || 'Unable to load panel'}
-            </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-6 dark:border-red-900/60 dark:bg-slate-900">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                {this.props.fallbackTitle || 'Something went wrong'}
+              </h3>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                {this.state.error?.message || 'An unexpected error occurred while rendering this view.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => this.setState({ hasError: false, error: null })}
+                className="mt-4 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Try again
+              </button>
+            </div>
           </div>
-          <p className="muted small" style={{ marginBottom: '1rem' }}>
-            An unexpected error occurred while rendering this section:
-          </p>
-          <pre
-            style={{
-              padding: '1rem',
-              background: 'var(--panel)',
-              borderRadius: '6px',
-              fontSize: '0.85rem',
-              color: '#ef4444',
-              overflowX: 'auto',
-              marginBottom: '1.5rem',
-            }}
-          >
-            {this.state.error?.message || String(this.state.error)}
-          </pre>
-          <button type="button" className="secondary small-button" onClick={this.handleReset}>
-            🔄 Try Again
-          </button>
-        </section>
+        </div>
       );
     }
+
     return this.props.children;
   }
 }

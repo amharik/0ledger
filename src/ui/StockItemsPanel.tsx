@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { Archive, Package, Plus, RotateCcw, X } from 'lucide-react';
 import { getDb } from '@/core/db/db';
 import { createStockItem, listStockItems, updateStockItem } from '@/core/db/master-service';
 import { formatMinor, parseAmountToMinor } from '@/core/money/money';
@@ -12,6 +13,11 @@ const METHODS: Array<{ value: ValuationMethod; label: string }> = [
   { value: 'standard-cost', label: 'Standard cost' },
 ];
 
+interface Props {
+  workspaceId: string;
+  onChanged?: ((message: string) => void) | undefined;
+}
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -21,12 +27,13 @@ function optionalAmount(value: string): number | undefined {
   return trimmed ? parseAmountToMinor(trimmed) : undefined;
 }
 
-export default function StockItemsPanel({ workspaceId }: { workspaceId: string }) {
+export default function StockItemsPanel({ workspaceId, onChanged }: Props) {
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [showAdd, setShowAdd] = useState(false);
 
   const [name, setName] = useState('');
   const [uom, setUom] = useState('NOS');
@@ -73,12 +80,15 @@ export default function StockItemsPanel({ workspaceId }: { workspaceId: string }
         ...(openingValueMinor !== undefined ? { openingValueMinor } : {}),
         valuationMethod: method,
       });
-      setNotice(`Created stock item “${created.name}”.`);
+      const message = `Created stock item “${created.name}”.`;
+      setNotice(message);
+      onChanged?.(message);
       setName('');
       setHsnSac('');
       setRate('');
       setOpeningQuantity('');
       setOpeningValue('');
+      setShowAdd(false);
       await load();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -93,7 +103,9 @@ export default function StockItemsPanel({ workspaceId }: { workspaceId: string }
     setBusy(true);
     try {
       await updateStockItem(getDb(), item.id, { archived: !item.archived });
-      setNotice(`${item.archived ? 'Restored' : 'Archived'} “${item.name}”.`);
+      const message = `${item.archived ? 'Restored' : 'Archived'} “${item.name}”.`;
+      setNotice(message);
+      onChanged?.(message);
       await load();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -117,91 +129,263 @@ export default function StockItemsPanel({ workspaceId }: { workspaceId: string }
   }
 
   return (
-    <div>
-      {error ? <div className="alert danger">{error}</div> : null}
-      {notice ? <div className="alert success">{notice}</div> : null}
-      {loading ? <p className="muted">Loading stock items…</p> : null}
-
-      {!loading && items.length === 0 ? (
-        <p className="muted">No stock items yet. Add one below; item lines in invoices can then use it.</p>
-      ) : (
-        <ul className="workspace-list">
-          {items.map((item) => (
-            <li key={item.id}>
-              <div>
-                <strong>{item.name}</strong>
-                <div className="muted small">
-                  {item.uom}
-                  {item.hsnSac ? ` · HSN ${item.hsnSac}` : ''}
-                  {item.openingQuantity ? ` · opening ${item.openingQuantity} ${item.uom}` : ''}
-                  {item.openingValueMinor !== undefined
-                    ? ` · ${formatMinor(item.openingValueMinor)}`
-                    : ''}
-                  {item.archived ? ' · archived' : ''}
-                </div>
-              </div>
-              <div className="inline-field">
-                <select
-                  aria-label={`Valuation method for ${item.name}`}
-                  value={item.valuationMethod ?? 'weighted-average'}
-                  onChange={(event) => void changeMethod(item, event.target.value as ValuationMethod)}
-                  disabled={busy}
-                >
-                  {METHODS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <button className="ghost small-button" disabled={busy} onClick={() => void archive(item)}>
-                  {item.archived ? 'Restore' : 'Archive'}
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <form onSubmit={create} className="create-form">
-        <h3>New stock item</h3>
-        <div className="form-grid">
-          <label>
-            <span>Name</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} required />
-          </label>
-          <label>
-            <span>UOM</span>
-            <input value={uom} onChange={(event) => setUom(event.target.value)} />
-          </label>
-          <label>
-            <span>HSN/SAC</span>
-            <input value={hsnSac} onChange={(event) => setHsnSac(event.target.value)} />
-          </label>
-          <label>
-            <span>Default rate</span>
-            <input inputMode="decimal" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="0.00" />
-          </label>
-          <label>
-            <span>Opening quantity</span>
-            <input inputMode="decimal" value={openingQuantity} onChange={(event) => setOpeningQuantity(event.target.value)} />
-          </label>
-          <label>
-            <span>Opening value</span>
-            <input inputMode="decimal" value={openingValue} onChange={(event) => setOpeningValue(event.target.value)} placeholder="0.00" />
-          </label>
-          <label>
-            <span>Valuation</span>
-            <select value={method} onChange={(event) => setMethod(event.target.value as ValuationMethod)}>
-              {METHODS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
+    <div className="space-y-5">
+      {/* Toolbar */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-50">
+            Stock items
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Inventory catalog used on sales and purchase invoices. Outward stock uses each item’s
+            valuation method.
+          </p>
         </div>
-        <button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Create stock item'}</button>
-      </form>
-      <p className="muted small">
-        Opening value defaults to opening quantity × default rate. Stock reports use the selected
-        valuation method for outward movements.
-      </p>
+        <button
+          type="button"
+          onClick={() => setShowAdd((open) => !open)}
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+        >
+          {showAdd ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          <span>{showAdd ? 'Close form' : 'Add stock item'}</span>
+        </button>
+      </div>
+
+      {error ? (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+          {notice}
+        </div>
+      ) : null}
+
+      {/* Add item form */}
+      {showAdd ? (
+        <form
+          onSubmit={create}
+          className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-[#111827]"
+        >
+          <h3 className="mb-4 font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+            New stock item
+          </h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="block lg:col-span-2">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Item name
+              </span>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Cloud Workstation License"
+                required
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Unit (UOM)
+              </span>
+              <input
+                value={uom}
+                onChange={(event) => setUom(event.target.value)}
+                placeholder="NOS"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                HSN / SAC
+              </span>
+              <input
+                value={hsnSac}
+                onChange={(event) => setHsnSac(event.target.value)}
+                placeholder="998314"
+                className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Default rate
+              </span>
+              <input
+                inputMode="decimal"
+                value={rate}
+                onChange={(event) => setRate(event.target.value)}
+                placeholder="0.00"
+                className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Opening qty
+              </span>
+              <input
+                inputMode="decimal"
+                value={openingQuantity}
+                onChange={(event) => setOpeningQuantity(event.target.value)}
+                placeholder="0"
+                className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Opening value
+              </span>
+              <input
+                inputMode="decimal"
+                value={openingValue}
+                onChange={(event) => setOpeningValue(event.target.value)}
+                placeholder="Auto (qty × rate)"
+                className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Valuation method
+              </span>
+              <select
+                value={method}
+                onChange={(event) => setMethod(event.target.value as ValuationMethod)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              >
+                {METHODS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowAdd(false)}
+              className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {busy ? 'Saving...' : 'Create stock item'}
+            </button>
+          </div>
+        </form>
+      ) : null}
+
+      {/* Table or Empty */}
+      {loading ? (
+        <div className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+          Loading stock items...
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-6 py-12 text-center dark:border-slate-800 dark:bg-[#111827]">
+          <Package className="mx-auto mb-3 h-8 w-8 text-slate-400" />
+          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            No stock items yet
+          </p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Add products or billable services to track inventory quantity and valuation on invoices.
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-[#111827]">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
+                  <th className="px-4 py-3">Item</th>
+                  <th className="px-4 py-3">Opening stock</th>
+                  <th className="px-4 py-3">Valuation</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                {items.map((item) => {
+                  const meta = [
+                    item.uom,
+                    item.hsnSac ? `HSN ${item.hsnSac}` : '',
+                    item.rateMinor !== undefined ? `Rate ${formatMinor(item.rateMinor)}` : '',
+                    item.archived ? 'Archived' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className={
+                        item.archived
+                          ? 'opacity-60 transition hover:bg-slate-50/70 dark:hover:bg-slate-800/40'
+                          : 'transition hover:bg-slate-50/70 dark:hover:bg-slate-800/40'
+                      }
+                    >
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-slate-900 dark:text-slate-100">
+                          {item.name}
+                        </div>
+                        <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                          {meta}
+                        </div>
+                      </td>
+                      <td className="num-tabular px-4 py-3 text-xs text-slate-700 dark:text-slate-300">
+                        {item.openingQuantity ? `${item.openingQuantity} ${item.uom}` : '—'}
+                        {item.openingValueMinor !== undefined ? (
+                          <span className="ml-2 text-slate-500 dark:text-slate-400">
+                            ({formatMinor(item.openingValueMinor)})
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          aria-label={`Valuation method for ${item.name}`}
+                          value={item.valuationMethod ?? 'weighted-average'}
+                          onChange={(event) =>
+                            void changeMethod(item, event.target.value as ValuationMethod)
+                          }
+                          disabled={busy}
+                          className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        >
+                          {METHODS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void archive(item)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
+                        >
+                          {item.archived ? (
+                            <>
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              <span>Restore</span>
+                            </>
+                          ) : (
+                            <>
+                              <Archive className="h-3.5 w-3.5" />
+                              <span>Archive</span>
+                            </>
+                          )}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

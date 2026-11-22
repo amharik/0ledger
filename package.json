@@ -7,8 +7,10 @@
   "license": "MIT",
   "scripts": {
     "postinstall": "wxt prepare",
-    "dev": "vite --config vite.config.desktop.ts",
+    "dev": "tsx server.ts",
+    "start": "node server.ts",
     "build": "vite build --config vite.config.desktop.ts",
+    "lint": "tsc --noEmit",
     "tauri": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri",
     "tauri:dev": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev",
     "tauri:build": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
@@ -21,15 +23,22 @@
     "test:stress": "STRESS=1 vitest run tests/release-stress.test.ts"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.5",
     "@tauri-apps/api": "^2.12.5",
+    "@types/express": "^5.0.6",
     "dexie": "^4.4.7",
     "dexie-react-hooks": "^4.4.0",
     "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "imapflow": "^2.12.2",
+    "lucide-react": "^1.77.0",
     "papaparse": "^5.7.0",
     "pdfjs-dist": "^6.5.438",
     "postal-mime": "^4.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },
   "devDependencies": {

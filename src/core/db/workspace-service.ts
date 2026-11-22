@@ -239,3 +239,70 @@ export async function getWorkspaceBundle(
 export function workspaceDisplayName(workspace: Workspace): string {
   return workspace.readableName || workspace.name || slugify(workspace.slug);
 }
+
+export interface UpdateCompanyProfileInput {
+  legalName?: string;
+  tradeName?: string;
+  gstin?: string;
+  pan?: string;
+  state?: string;
+  pincode?: string;
+  address?: string;
+  booksBegin?: string;
+  fyStartMonth?: number;
+}
+
+export async function updateCompanyProfile(
+  db: LedgerDatabase,
+  companyId: string,
+  input: UpdateCompanyProfileInput,
+): Promise<CompanyProfile> {
+  const current = await db.companies.get(companyId);
+  if (!current) throw new Error(`Company profile not found: ${companyId}`);
+
+  const legalName = input.legalName !== undefined ? input.legalName.trim() : current.legalName;
+  if (!legalName) throw new Error('Company legal name is required');
+
+  const nextTradeName =
+    input.tradeName !== undefined ? input.tradeName.trim() || undefined : current.tradeName;
+  const nextGstin =
+    input.gstin !== undefined ? input.gstin.trim().toUpperCase() || undefined : current.gstin;
+  const nextPan =
+    input.pan !== undefined ? input.pan.trim().toUpperCase() || undefined : current.pan;
+  const nextState = input.state !== undefined ? input.state.trim() || undefined : current.state;
+  const nextPincode =
+    input.pincode !== undefined ? input.pincode.trim() || undefined : current.pincode;
+  const nextAddress =
+    input.address !== undefined ? input.address.trim() || undefined : current.address;
+  const nextBooksBegin =
+    input.booksBegin !== undefined ? input.booksBegin.trim() : current.booksBegin;
+
+  const updated = CompanyProfileSchema.parse(
+    compact({
+      id: current.id,
+      workspaceId: current.workspaceId,
+      legalName,
+      tradeName: nextTradeName,
+      gstin: nextGstin,
+      pan: nextPan,
+      state: nextState,
+      pincode: nextPincode,
+      address: nextAddress,
+      country: current.country,
+      currency: current.currency,
+      booksBegin: nextBooksBegin,
+      settings: {
+        ...current.settings,
+        ...(input.fyStartMonth !== undefined ? { fyStartMonth: input.fyStartMonth } : {}),
+      },
+      createdAt: current.createdAt,
+      updatedAt: nowIso(),
+    }),
+  );
+
+  await db.companies.put(updated);
+  await mirrorWorkspace(db, current.workspaceId);
+  await markDriveDirty(db, current.workspaceId);
+  return updated;
+}
+

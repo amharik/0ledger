@@ -15,15 +15,7 @@ import {
 } from '@/core/ledger/reports';
 import { formatMinor } from '@/core/money/money';
 
-type ReportTab = 'trial' | 'pnl' | 'balance' | 'parties' | 'aging';
-
-const TABS: Array<{ id: ReportTab; label: string }> = [
-  { id: 'trial', label: 'Trial balance' },
-  { id: 'pnl', label: 'P&L' },
-  { id: 'balance', label: 'Balance sheet' },
-  { id: 'parties', label: 'Parties' },
-  { id: 'aging', label: 'Bill aging' },
-];
+export type FinancialReportTab = 'pnl' | 'balance' | 'trial' | 'parties';
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -36,10 +28,23 @@ function errorMessage(cause: unknown): string {
 interface Props {
   workspaceId: string;
   refreshToken: number;
+  activeTab?: FinancialReportTab;
+  onTabChange?: (tab: FinancialReportTab) => void;
 }
 
-export function ReportsPanel({ workspaceId, refreshToken }: Props) {
-  const [tab, setTab] = useState<ReportTab>('trial');
+export function ReportsPanel({
+  workspaceId,
+  refreshToken,
+  activeTab,
+  onTabChange,
+}: Props) {
+  const [internalTab, setInternalTab] = useState<FinancialReportTab>('pnl');
+  const tab = activeTab ?? internalTab;
+  const setTab = (next: FinancialReportTab) => {
+    setInternalTab(next);
+    onTabChange?.(next);
+  };
+
   const [asOf, setAsOf] = useState(today());
   const [tb, setTb] = useState<TrialBalance>();
   const [pnl, setPnl] = useState<ProfitAndLoss>();
@@ -85,238 +90,409 @@ export function ReportsPanel({ workspaceId, refreshToken }: Props) {
     (row) => row.closingMinor !== 0 || row.debitMinor !== 0 || row.creditMinor !== 0,
   );
 
+  const totalIncomeMinor = (pnl?.income ?? []).reduce((s, r) => s + r.amountMinor, 0);
+  const totalExpenseMinor = (pnl?.expenses ?? []).reduce((s, r) => s + r.amountMinor, 0);
+
   return (
-    <section className="card">
-      <div className="section-head">
-        <h2>Reports</h2>
-        {tab === 'aging' ? (
-          <label className="inline-field">
-            <span className="muted small">As of</span>
-            <input type="date" value={asOf} onChange={(event) => setAsOf(event.target.value)} />
-          </label>
-        ) : (
-          <span className="muted small">
-            {loading
-              ? 'Loading…'
-              : isNativeStoreAvailable()
-                ? 'live from SQLite engine'
-                : 'live from local ledger'}
-          </span>
-        )}
-      </div>
-
-      <div className="tabs" role="tablist">
-        {TABS.map((item) => (
-          <button
-            type="button"
-            key={item.id}
-            role="tab"
-            aria-selected={tab === item.id}
-            className={tab === item.id ? 'tab active' : 'tab'}
-            onClick={() => setTab(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      {error ? <div className="alert danger">{error}</div> : null}
-
-      {tab === 'trial' ? (
-        !nonZeroTrial || nonZeroTrial.length === 0 ? (
-          <p className="muted">Post a voucher to see balances.</p>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ledger</th>
-                  <th>Group</th>
-                  <th className="num">Dr</th>
-                  <th className="num">Cr</th>
-                </tr>
-              </thead>
-              <tbody>
-                {nonZeroTrial.map((row) => (
-                  <tr key={row.ledgerId}>
-                    <td>{row.name}</td>
-                    <td className="muted small">{row.tallyParent}</td>
-                    <td className="num">{row.closingMinor > 0 ? formatMinor(row.closingMinor) : '—'}</td>
-                    <td className="num">
-                      {row.closingMinor < 0 ? formatMinor(-row.closingMinor) : '—'}
-                    </td>
-                  </tr>
-                ))}
-                <tr>
-                  <td colSpan={2}>
-                    <strong>Total</strong>
-                  </td>
-                  <td className="num">
-                    <strong>{formatMinor(tb?.totalDebitMinor ?? 0)}</strong>
-                  </td>
-                  <td className="num">
-                    <strong>{formatMinor(tb?.totalCreditMinor ?? 0)}</strong>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )
+    <div className="space-y-5">
+      {!activeTab ? (
+        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800/80">
+          {(
+            [
+              { id: 'pnl', label: 'Profit & Loss' },
+              { id: 'balance', label: 'Balance Sheet' },
+              { id: 'trial', label: 'Trial Balance' },
+              { id: 'parties', label: 'Parties & Aging' },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                tab === item.id
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       ) : null}
 
+      {error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+          {error}
+        </div>
+      ) : null}
+
+      {/* Profit & Loss */}
       {tab === 'pnl' ? (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Ledger</th>
-                <th className="num">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pnl?.income.map((row) => (
-                <tr key={`i-${row.ledgerId}`}>
-                  <td className="muted">Income</td>
-                  <td>{row.name}</td>
-                  <td className="num">{formatMinor(row.amountMinor)}</td>
-                </tr>
-              ))}
-              {pnl?.expenses.map((row) => (
-                <tr key={`e-${row.ledgerId}`}>
-                  <td className="muted">Expense</td>
-                  <td>{row.name}</td>
-                  <td className="num">{formatMinor(row.amountMinor)}</td>
-                </tr>
-              ))}
-              <tr>
-                <td colSpan={2}>
-                  <strong>Net profit</strong>
-                </td>
-                <td className={`num ${(pnl?.netProfitMinor ?? 0) >= 0 ? 'positive' : 'negative'}`}>
-                  <strong>{formatMinor(pnl?.netProfitMinor ?? 0)}</strong>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {tab === 'balance' ? (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Side</th>
-                <th>Ledger</th>
-                <th className="num">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bs?.assets.map((row) => (
-                <tr key={`a-${row.ledgerId}`}>
-                  <td className="muted">Asset</td>
-                  <td>{row.name}</td>
-                  <td className="num">{formatMinor(row.amountMinor)}</td>
-                </tr>
-              ))}
-              {bs?.liabilities.map((row) => (
-                <tr key={`l-${row.ledgerId}`}>
-                  <td className="muted">Liability</td>
-                  <td>{row.name}</td>
-                  <td className="num">{formatMinor(row.amountMinor)}</td>
-                </tr>
-              ))}
-              {bs?.equity.map((row) => (
-                <tr key={`q-${row.ledgerId}`}>
-                  <td className="muted">Equity</td>
-                  <td>{row.name}</td>
-                  <td className="num">{formatMinor(row.amountMinor)}</td>
-                </tr>
-              ))}
-              <tr>
-                <td className="muted">Equity</td>
-                <td>Net profit</td>
-                <td className="num">{formatMinor(bs?.netProfitMinor ?? 0)}</td>
-              </tr>
-              <tr>
-                <td colSpan={2}>
-                  <strong>
-                    Assets {formatMinor(bs?.totalAssetsMinor ?? 0)} · Liabilities{' '}
-                    {formatMinor(bs?.totalLiabilitiesMinor ?? 0)} · Equity{' '}
-                    {formatMinor((bs?.totalEquityMinor ?? 0) + (bs?.netProfitMinor ?? 0))}
-                  </strong>
-                </td>
-                <td className={`num ${bs?.balanced ? 'positive' : 'negative'}`}>
-                  <strong>{bs?.balanced ? 'Balanced' : 'Check'}</strong>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {tab === 'parties' ? (
-        parties.length === 0 ? (
-          <p className="muted">No party balances yet.</p>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Party</th>
-                  <th>Type</th>
-                  <th className="num">Outstanding</th>
-                  <th className="num">Bills</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parties.map((row) => (
-                  <tr key={row.ledgerId}>
-                    <td>{row.partyName}</td>
-                    <td className="muted">{row.type}</td>
-                    <td className="num">{formatMinor(row.outstandingMinor)}</td>
-                    <td className="num">{row.billCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white sm:grid-cols-3 sm:divide-x sm:divide-y-0 dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
+            <div className="p-5">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Total income</div>
+              <div className="num-tabular mt-1.5 text-xl font-semibold text-slate-900 dark:text-slate-100">
+                {loading ? '—' : formatMinor(totalIncomeMinor)}
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Total expenses</div>
+              <div className="num-tabular mt-1.5 text-xl font-semibold text-slate-900 dark:text-slate-100">
+                {loading ? '—' : formatMinor(totalExpenseMinor)}
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Net profit</div>
+              <div
+                className={`num-tabular mt-1.5 text-xl font-semibold ${
+                  (pnl?.netProfitMinor ?? 0) >= 0
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-red-700 dark:text-red-400'
+                }`}
+              >
+                {loading ? '—' : formatMinor(pnl?.netProfitMinor ?? 0)}
+              </div>
+            </div>
           </div>
-        )
+
+          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            {loading ? (
+              <div className="space-y-2 p-6">
+                <div className="h-9 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
+                <div className="h-9 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
+              </div>
+            ) : (pnl?.income.length ?? 0) === 0 && (pnl?.expenses.length ?? 0) === 0 ? (
+              <div className="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                Post income or expense entries to generate your Profit &amp; Loss statement.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <th className="px-5 py-3">Category</th>
+                      <th className="px-5 py-3">Ledger</th>
+                      <th className="px-5 py-3 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {pnl?.income.map((row) => (
+                      <tr key={`i-${row.ledgerId}`}>
+                        <td className="px-5 py-3 text-xs text-emerald-700 dark:text-emerald-400">
+                          Income
+                        </td>
+                        <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                          {row.name}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                          {formatMinor(row.amountMinor)}
+                        </td>
+                      </tr>
+                    ))}
+                    {pnl?.expenses.map((row) => (
+                      <tr key={`e-${row.ledgerId}`}>
+                        <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">
+                          Expense
+                        </td>
+                        <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                          {row.name}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                          {formatMinor(row.amountMinor)}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="bg-slate-50 font-semibold dark:bg-slate-950/60">
+                      <td colSpan={2} className="px-5 py-3.5 text-slate-900 dark:text-slate-100">
+                        Net profit
+                      </td>
+                      <td
+                        className={`num-tabular px-5 py-3.5 text-right ${
+                          (pnl?.netProfitMinor ?? 0) >= 0
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-red-700 dark:text-red-400'
+                        }`}
+                      >
+                        {formatMinor(pnl?.netProfitMinor ?? 0)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
       ) : null}
 
-      {tab === 'aging' ? (
-        aging.length === 0 ? (
-          <p className="muted">No open bills as of {asOf}.</p>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Party</th>
-                  <th>Bill</th>
-                  <th>Due</th>
-                  <th className="num">Outstanding</th>
-                  <th>Bucket</th>
-                </tr>
-              </thead>
-              <tbody>
-                {aging.map((row) => (
-                  <tr key={`${row.ledgerId}-${row.billRef}`}>
-                    <td>{row.partyName}</td>
-                    <td>{row.billRef}</td>
-                    <td>{row.dueDate}</td>
-                    <td className="num">{formatMinor(row.outstandingMinor)}</td>
-                    <td className={row.bucket === 'current' ? 'positive' : 'negative'}>
-                      {row.bucket}
+      {/* Balance Sheet */}
+      {tab === 'balance' ? (
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white sm:grid-cols-3 sm:divide-x sm:divide-y-0 dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
+            <div className="p-5">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Total assets</div>
+              <div className="num-tabular mt-1.5 text-xl font-semibold text-slate-900 dark:text-slate-100">
+                {loading ? '—' : formatMinor(bs?.totalAssetsMinor ?? 0)}
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="text-xs text-slate-500 dark:text-slate-400">Total liabilities</div>
+              <div className="num-tabular mt-1.5 text-xl font-semibold text-slate-900 dark:text-slate-100">
+                {loading ? '—' : formatMinor(bs?.totalLiabilitiesMinor ?? 0)}
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                <span>Equity + Net profit</span>
+                {bs ? (
+                  <span
+                    className={`font-medium ${
+                      bs.balanced
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-red-700 dark:text-red-400'
+                    }`}
+                  >
+                    {bs.balanced ? 'Balanced' : 'Unbalanced'}
+                  </span>
+                ) : null}
+              </div>
+              <div className="num-tabular mt-1.5 text-xl font-semibold text-slate-900 dark:text-slate-100">
+                {loading
+                  ? '—'
+                  : formatMinor((bs?.totalEquityMinor ?? 0) + (bs?.netProfitMinor ?? 0))}
+              </div>
+            </div>
+          </div>
+
+          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                    <th className="px-5 py-3">Section</th>
+                    <th className="px-5 py-3">Ledger</th>
+                    <th className="px-5 py-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {bs?.assets.map((row) => (
+                    <tr key={`a-${row.ledgerId}`}>
+                      <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">Asset</td>
+                      <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {row.name}
+                      </td>
+                      <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                        {formatMinor(row.amountMinor)}
+                      </td>
+                    </tr>
+                  ))}
+                  {bs?.liabilities.map((row) => (
+                    <tr key={`l-${row.ledgerId}`}>
+                      <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">
+                        Liability
+                      </td>
+                      <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {row.name}
+                      </td>
+                      <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                        {formatMinor(row.amountMinor)}
+                      </td>
+                    </tr>
+                  ))}
+                  {bs?.equity.map((row) => (
+                    <tr key={`q-${row.ledgerId}`}>
+                      <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">
+                        Equity
+                      </td>
+                      <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {row.name}
+                      </td>
+                      <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                        {formatMinor(row.amountMinor)}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">Equity</td>
+                    <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                      Current period net profit
+                    </td>
+                    <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                      {formatMinor(bs?.netProfitMinor ?? 0)}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       ) : null}
-    </section>
+
+      {/* Trial Balance */}
+      {tab === 'trial' ? (
+        <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          {!nonZeroTrial || nonZeroTrial.length === 0 ? (
+            <div className="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+              Post a voucher or set an opening balance to view your Trial Balance.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                    <th className="px-5 py-3">Ledger</th>
+                    <th className="px-5 py-3">Tally group</th>
+                    <th className="px-5 py-3 text-right">Debit</th>
+                    <th className="px-5 py-3 text-right">Credit</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {nonZeroTrial.map((row) => (
+                    <tr key={row.ledgerId}>
+                      <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {row.name}
+                      </td>
+                      <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">
+                        {row.tallyParent}
+                      </td>
+                      <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                        {row.closingMinor > 0 ? formatMinor(row.closingMinor) : '—'}
+                      </td>
+                      <td className="num-tabular px-5 py-3 text-right text-slate-900 dark:text-slate-100">
+                        {row.closingMinor < 0 ? formatMinor(-row.closingMinor) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="bg-slate-50 font-semibold dark:bg-slate-950/60">
+                    <td colSpan={2} className="px-5 py-3.5 text-slate-900 dark:text-slate-100">
+                      Total
+                    </td>
+                    <td className="num-tabular px-5 py-3.5 text-right text-slate-900 dark:text-slate-100">
+                      {formatMinor(tb?.totalDebitMinor ?? 0)}
+                    </td>
+                    <td className="num-tabular px-5 py-3.5 text-right text-slate-900 dark:text-slate-100">
+                      {formatMinor(tb?.totalCreditMinor ?? 0)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {/* Parties & Bill Aging */}
+      {tab === 'parties' ? (
+        <div className="space-y-6">
+          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Party balances
+              </h3>
+            </div>
+            {parties.length === 0 ? (
+              <div className="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                No outstanding party balances yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <th className="px-5 py-3">Party</th>
+                      <th className="px-5 py-3">Role</th>
+                      <th className="px-5 py-3 text-right">Bills</th>
+                      <th className="px-5 py-3 text-right">Outstanding</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {parties.map((row) => (
+                      <tr key={row.ledgerId}>
+                        <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                          {row.partyName}
+                        </td>
+                        <td className="px-5 py-3 text-xs capitalize text-slate-500 dark:text-slate-400">
+                          {row.type}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-right text-slate-600 dark:text-slate-400">
+                          {row.billCount}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-right font-medium text-slate-900 dark:text-slate-100">
+                          {formatMinor(row.outstandingMinor)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Bill-wise aging
+              </h3>
+              <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span>As of</span>
+                <input
+                  type="date"
+                  value={asOf}
+                  onChange={(e) => setAsOf(e.target.value)}
+                  className="num-tabular rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </label>
+            </div>
+            {aging.length === 0 ? (
+              <div className="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                No open bills as of {asOf}.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <th className="px-5 py-3">Party</th>
+                      <th className="px-5 py-3">Bill ref</th>
+                      <th className="px-5 py-3">Due date</th>
+                      <th className="px-5 py-3">Bucket</th>
+                      <th className="px-5 py-3 text-right">Outstanding</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {aging.map((row) => (
+                      <tr key={`${row.ledgerId}-${row.billRef}`}>
+                        <td className="px-5 py-3 font-medium text-slate-900 dark:text-slate-100">
+                          {row.partyName}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-xs text-slate-700 dark:text-slate-300">
+                          {row.billRef}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-xs text-slate-600 dark:text-slate-400">
+                          {row.dueDate}
+                        </td>
+                        <td
+                          className={`px-5 py-3 text-xs font-medium ${
+                            row.bucket === 'current'
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : 'text-red-700 dark:text-red-400'
+                          }`}
+                        >
+                          {row.bucket}
+                        </td>
+                        <td className="num-tabular px-5 py-3 text-right font-medium text-slate-900 dark:text-slate-100">
+                          {formatMinor(row.outstandingMinor)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
+    </div>
   );
 }

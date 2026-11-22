@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, Inbox, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { getDb } from '@/core/db/db';
 import type { ImportBatch, Ledger, StatementLine } from '@/core/model';
 import {
@@ -14,7 +15,6 @@ import {
 } from '@/core/ingest';
 import { parseTextStatement } from '@/core/ingest/parsers';
 import { MAX_INGEST_BYTES } from '@/core/ingest/limits';
-import { parseAlertText } from '@/core/ingest/email';
 import { captureStatementLines } from '@/core/autopilot';
 import { formatMinor } from '@/core/money/money';
 
@@ -30,31 +30,44 @@ interface Props {
 }
 
 export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged }: Props) {
-  const banks = useMemo(() => ledgers.filter((ledger) => ledger.isBank && !ledger.archived), [ledgers]);
+  const banks = useMemo(
+    () => ledgers.filter((ledger) => ledger.isBank && !ledger.archived),
+    [ledgers],
+  );
   const expenses = useMemo(
     () =>
       ledgers
         .filter((ledger) => !ledger.archived && !ledger.isBank && !ledger.isTax && !ledger.isSystem)
-        .sort((a, b) => (a.name === 'Purchases' ? -1 : b.name === 'Purchases' ? 1 : a.name.localeCompare(b.name))),
+        .sort((a, b) =>
+          a.name === 'Purchases'
+            ? -1
+            : b.name === 'Purchases'
+              ? 1
+              : a.name.localeCompare(b.name),
+        ),
     [ledgers],
   );
+
   const [accountId, setAccountId] = useState('');
   const [defaultLedgerId, setDefaultLedgerId] = useState('');
   const [password, setPassword] = useState('');
   const [text, setText] = useState('');
+  const [showPaste, setShowPaste] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
   const [results, setResults] = useState<StageImportResult[]>([]);
   const [batches, setBatches] = useState<ImportBatch[]>([]);
   const [activeBatchId, setActiveBatchId] = useState<string>();
   const [rows, setRows] = useState<StatementLine[]>([]);
+  const [confirmAction, setConfirmAction] = useState<'discard' | 'undo' | null>(null);
 
   const activeBatch = batches.find((batch) => batch.id === activeBatchId);
 
   useEffect(() => {
     if (!accountId && banks[0]) setAccountId(banks[0].id);
-    if (accountId && !banks.some((ledger) => ledger.id === accountId)) setAccountId(banks[0]?.id ?? '');
+    if (accountId && !banks.some((ledger) => ledger.id === accountId)) {
+      setAccountId(banks[0]?.id ?? '');
+    }
   }, [accountId, banks]);
 
   useEffect(() => {
@@ -75,6 +88,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
   }, [workspaceId, refreshToken, results]);
 
   useEffect(() => {
+    setConfirmAction(null);
     if (!activeBatchId) {
       setRows([]);
       return;
@@ -93,7 +107,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     setActiveBatchId(result[result.length - 1]?.batch.id);
     const total = result.reduce((sum, item) => sum + item.batch.totalLines, 0);
     const duplicates = result.reduce((sum, item) => sum + item.duplicates, 0);
-    setNotice(
+    onChanged(
       `Staged ${total} line${total === 1 ? '' : 's'}${duplicates ? ` · ${duplicates} duplicate skipped` : ''}`,
     );
   }
@@ -102,9 +116,8 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     if (!file) return;
     setBusy(true);
     setError(undefined);
-    setNotice(undefined);
     if (file.size > MAX_INGEST_BYTES) {
-      setError('File is too large (max 25 MB).');
+      setError('File exceeds the 25 MB limit.');
       setBusy(false);
       return;
     }
@@ -122,7 +135,6 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
         { ...(accountId ? { accountId } : {}) },
       );
       accept(staged);
-      onChanged(`Staged ${file.name}`);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -134,62 +146,18 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     if (!text.trim()) return;
     setBusy(true);
     setError(undefined);
-    setNotice(undefined);
     try {
-      const statement = parseTextStatement(text, { fileName: 'pasted.txt' });
+      const statement = parseTextStatement(text, { fileName: 'pasted-statement.txt' });
       const staged = await stageImport(getDb(), {
         workspaceId,
         source: 'manual',
         statement,
-        fileName: 'pasted.txt',
+        fileName: 'pasted-statement.txt',
         ...(accountId ? { accountId } : {}),
       });
       accept([staged]);
       setText('');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function capturePage() {
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-    try {
-      if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.scripting) {
-        throw new Error('Active tab webmail capture requires running inside a browser extension.');
-      }
-      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      const tab = tabs[0];
-      if (!tab?.id) throw new Error('No active tab found');
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => ({
-          title: document.title,
-          url: location.href,
-          text: document.body?.innerText ?? '',
-        }),
-      });
-      const page = results[0]?.result;
-      if (!page) throw new Error('Could not read the active page');
-      const snippet = page.text.slice(0, 200_000);
-      const statement =
-        parseAlertText({ text: snippet, subject: page.title, from: page.url }) ??
-        parseTextStatement(snippet, { fileName: page.url });
-      if (statement.rows.length === 0) {
-        throw new Error('No bank alert or statement lines found on this page');
-      }
-      const staged = await stageImport(getDb(), {
-        workspaceId,
-        source: statement.kind === 'fastag' ? 'fastag' : 'email',
-        statement,
-        fileName: page.title.slice(0, 120) || 'webmail-capture',
-        ...(accountId ? { accountId } : {}),
-      });
-      accept([staged]);
-      onChanged('Captured page statement');
+      setShowPaste(false);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -203,10 +171,9 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     setError(undefined);
     try {
       const result = await captureStatementLines(getDb(), workspaceId, activeBatch, rows);
-      setNotice(
-        `Added ${result.created.length} event${result.created.length === 1 ? '' : 's'} to the Autopilot inbox${result.duplicates ? ` · ${result.duplicates} duplicate skipped` : ''}`,
+      onChanged(
+        `Sent ${result.created.length} event${result.created.length === 1 ? '' : 's'} to Money Inbox`,
       );
-      onChanged('Statement sent to Autopilot inbox');
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -222,11 +189,10 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
       const result = await commitImportBatch(getDb(), workspaceId, activeBatchId, {
         accountId,
         defaultLedgerId,
-        actor: 'sidepanel',
+        actor: 'desktop',
       });
-      setNotice(`Posted ${result.committed} voucher${result.committed === 1 ? '' : 's'}${result.failed ? ` · ${result.failed} failed` : ''}`);
       if (result.errors.length) setError(result.errors.join('\n'));
-      onChanged('Statement imported');
+      onChanged(`Posted ${result.committed} voucher${result.committed === 1 ? '' : 's'}`);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -235,14 +201,13 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
   }
 
   async function discard(batchId: string) {
-    if (!window.confirm('Discard this staged import?')) return;
     setBusy(true);
     setError(undefined);
     try {
       await discardImportBatch(getDb(), workspaceId, batchId);
       if (activeBatchId === batchId) setActiveBatchId(undefined);
-      setNotice('Import discarded');
-      onChanged('Import discarded');
+      setConfirmAction(null);
+      onChanged('Staged import discarded');
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -251,13 +216,12 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
   }
 
   async function undo(batchId: string) {
-    if (!window.confirm('Undo this import and delete its posted vouchers?')) return;
     setBusy(true);
     setError(undefined);
     try {
       const count = await undoImportBatch(getDb(), workspaceId, batchId);
-      setNotice(`Undid ${count} voucher${count === 1 ? '' : 's'}`);
-      onChanged('Import undone');
+      setConfirmAction(null);
+      onChanged(`Undid ${count} posted voucher${count === 1 ? '' : 's'}`);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -265,209 +229,303 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     }
   }
 
-  return (
-    <section className="card">
-      <div className="section-head">
-        <h2>Import statement</h2>
-        <span className="muted small">CSV, XLSX, PDF, EML, FASTag text</span>
-      </div>
+  const balanceCheck = activeBatch ? verifyStatementBalance(rows) : undefined;
 
-      <div className="form-grid compact-grid">
-        <label>
-          Bank / FASTag ledger
-          <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
-            {banks.map((ledger) => (
-              <option key={ledger.id} value={ledger.id}>
-                {ledger.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Default contra ledger
-          <select
-            value={defaultLedgerId}
-            onChange={(event) => setDefaultLedgerId(event.target.value)}
+  return (
+    <div className="space-y-6">
+      <section className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Import bank or FASTag statement
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Upload CSV, Excel, PDF, or saved .eml files. Verify running balances before posting or sending to Inbox.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowPaste((v) => !v)}
+            className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-400"
           >
-            {expenses.map((ledger) => (
-              <option key={ledger.id} value={ledger.id}>
-                {ledger.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          PDF password
+            {showPaste ? 'Hide paste box' : 'Or paste raw statement text'}
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+              Bank / FASTag account
+            </label>
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              {banks.map((ledger) => (
+                <option key={ledger.id} value={ledger.id}>
+                  {ledger.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+              Default contra ledger (for bulk post)
+            </label>
+            <select
+              value={defaultLedgerId}
+              onChange={(e) => setDefaultLedgerId(e.target.value)}
+              className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              {expenses.map((ledger) => (
+                <option key={ledger.id} value={ledger.id}>
+                  {ledger.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+              PDF password <span className="font-normal text-slate-400">(optional)</span>
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="If statement PDF is protected"
+              className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+        </div>
+
+        <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-6 py-8 text-center transition-colors hover:border-blue-500 hover:bg-blue-50/30 dark:border-slate-700 dark:bg-slate-950/60 dark:hover:border-blue-500">
+          <Upload className="h-5 w-5 text-slate-400" />
+          <span className="mt-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+            {busy ? 'Reading statement…' : 'Choose statement file to stage'}
+          </span>
+          <span className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Supports HDFC, ICICI, SBI, Axis, Kotak, FASTag CSV/XLSX/PDF, and .eml files up to 25 MB
+          </span>
           <input
-            type="password"
-            value={password}
-            placeholder="optional"
-            onChange={(event) => setPassword(event.target.value)}
+            type="file"
+            className="hidden"
+            accept=".csv,.xlsx,.xls,.pdf,.eml,.txt,text/csv,application/pdf"
+            disabled={busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              void pickFile(file);
+            }}
           />
         </label>
-      </div>
 
-      <label className="file-drop">
-        <span>{busy ? 'Working…' : 'Choose statement file'}</span>
-        <input
-          type="file"
-          accept=".csv,.xlsx,.xls,.pdf,.eml,.txt,text/csv,application/pdf"
-          disabled={busy}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = '';
-            void pickFile(file);
-          }}
-        />
-      </label>
-
-      {typeof chrome !== 'undefined' && chrome.tabs ? (
-        <div className="capture-row">
-          <button type="button" className="secondary" disabled={busy} onClick={() => void capturePage()}>
-            Capture bank email tab
-          </button>
-          <span className="muted small">Open the bank email or statement page in the active tab.</span>
-        </div>
-      ) : (
-        <div style={{ background: 'var(--panel)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', margin: '0.75rem 0' }}>
-          💡 <strong>Desktop Email Ingestion:</strong> In the Desktop Edition, you can drag & drop your saved email file (<code>.eml</code>) into the file dropzone above or paste the email alert text below to extract all transactions automatically.
-        </div>
-      )}
-
-      <details>
-        <summary className="muted small">Or paste statement text</summary>
-        <textarea
-          rows={5}
-          value={text}
-          placeholder="Paste bank/FASTag text with dates and amounts…"
-          onChange={(event) => setText(event.target.value)}
-        />
-        <button type="button" className="secondary" disabled={busy || !text.trim()} onClick={() => void stagePasted()}>
-          Stage pasted text
-        </button>
-      </details>
-
-      {notice ? <div className="alert success">{notice}</div> : null}
-      {error ? <div className="alert danger">{error}</div> : null}
-
-      {results.length > 1 ? (
-        <div className="tabs">
-          {results.map((result) => (
+        {showPaste ? (
+          <div className="mt-4 space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <textarea
+              rows={5}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Paste CSV or bank statement text with dates and amounts…"
+              className="w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
             <button
               type="button"
-              key={result.batch.id}
-              className={activeBatchId === result.batch.id ? 'tab active' : 'tab'}
-              onClick={() => setActiveBatchId(result.batch.id)}
+              disabled={busy || !text.trim()}
+              onClick={() => void stagePasted()}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500"
             >
-              {result.batch.adapterId} ({result.batch.totalLines})
+              Stage pasted statement
             </button>
-          ))}
-        </div>
-      ) : null}
-
-      {activeBatch ? (
-        <div className="stack">
-          <div>
-            <strong>{activeBatch.fileName ?? 'Pasted statement'}</strong>
-            <span className="muted small">
-              {' '}
-              · {activeBatch.adapterId ?? 'generic'} · {activeBatch.totalLines} lines ·{' '}
-              {activeBatch.status}
-            </span>
           </div>
-          {(() => {
-            const balance = verifyStatementBalance(rows);
-            if (balance.checked === 0) return null;
-            return balance.mismatches.length === 0 ? (
-              <p className="muted small">✓ Balances reconcile across {balance.checked} line{balance.checked === 1 ? '' : 's'}.</p>
-            ) : (
-              <p className="negative small">
-                {balance.mismatches.length} balance mismatch{balance.mismatches.length === 1 ? '' : 'es'} detected.
+        ) : null}
+
+        {error ? (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+            {error}
+          </div>
+        ) : null}
+      </section>
+
+      {/* Active Staged Batch Preview */}
+      {activeBatch ? (
+        <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                {activeBatch.fileName ?? 'Pasted statement'}
+              </h3>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                {activeBatch.adapterId ?? 'generic'} ·{' '}
+                <span className="num-tabular">{activeBatch.totalLines}</span> lines ·{' '}
+                {activeBatch.status}
               </p>
-            );
-          })()}
-          <div className="table-scroll import-preview">
-            <table>
+            </div>
+
+            {balanceCheck && balanceCheck.checked > 0 ? (
+              <div className="flex items-center gap-1.5 text-xs">
+                {balanceCheck.mismatches.length === 0 ? (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-emerald-700 dark:text-emerald-400">
+                      Running balance verified ({balanceCheck.checked} lines)
+                    </span>
+                  </>
+                ) : (
+                  <span className="font-medium text-red-700 dark:text-red-400">
+                    {balanceCheck.mismatches.length} balance mismatch
+                    {balanceCheck.mismatches.length === 1 ? '' : 'es'} detected
+                  </span>
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="max-h-80 overflow-auto">
+            <table className="w-full border-collapse text-left text-sm">
               <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Description</th>
-                  <th className="num">Out</th>
-                  <th className="num">In</th>
-                  <th>Status</th>
+                <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                  <th className="px-4 py-2.5">Date</th>
+                  <th className="px-4 py-2.5">Description</th>
+                  <th className="px-4 py-2.5 text-right">Out</th>
+                  <th className="px-4 py-2.5 text-right">In</th>
+                  <th className="px-4 py-2.5">Status</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                 {rows.slice(0, 100).map((row) => (
                   <tr key={row.id}>
-                    <td>{row.date}</td>
-                    <td>
-                      {row.description}
-                      {row.reference ? <span className="muted small"> · {row.reference}</span> : null}
+                    <td className="num-tabular whitespace-nowrap px-4 py-2.5 text-xs text-slate-600 dark:text-slate-400">
+                      {row.date}
                     </td>
-                    <td className="num">{row.debitMinor ? formatMinor(row.debitMinor) : '—'}</td>
-                    <td className="num">{row.creditMinor ? formatMinor(row.creditMinor) : '—'}</td>
-                    <td className="muted small">{row.matchStatus}</td>
+                    <td className="max-w-md truncate px-4 py-2.5 text-xs text-slate-900 dark:text-slate-100">
+                      {row.description}
+                      {row.reference ? (
+                        <span className="ml-1.5 text-slate-400">· {row.reference}</span>
+                      ) : null}
+                    </td>
+                    <td className="num-tabular whitespace-nowrap px-4 py-2.5 text-right text-xs text-slate-900 dark:text-slate-100">
+                      {row.debitMinor ? formatMinor(row.debitMinor) : '—'}
+                    </td>
+                    <td className="num-tabular whitespace-nowrap px-4 py-2.5 text-right text-xs text-emerald-700 dark:text-emerald-400">
+                      {row.creditMinor ? formatMinor(row.creditMinor) : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-slate-500 dark:text-slate-400">
+                      {row.matchStatus}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="form-actions">
-            {activeBatch.status === 'staged' || activeBatch.status === 'reviewing' ? (
-              <>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-800">
+            {confirmAction ? (
+              <div className="flex items-center gap-3 text-xs">
+                <span className="text-red-700 dark:text-red-400">
+                  {confirmAction === 'discard'
+                    ? 'Discard this staged batch?'
+                    : 'Undo this import and remove its posted vouchers?'}
+                </span>
                 <button
                   type="button"
-                  disabled={busy || !accountId || !defaultLedgerId}
-                  onClick={() => void commit()}
-                >
-                  Post {activeBatch.totalLines} line{activeBatch.totalLines === 1 ? '' : 's'}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
                   disabled={busy}
-                  onClick={() => void sendToInbox()}
+                  onClick={() => setConfirmAction(null)}
+                  className="text-slate-500 hover:underline"
                 >
-                  Send {activeBatch.totalLines} to Autopilot inbox
+                  Keep
                 </button>
                 <button
                   type="button"
-                  className="secondary"
                   disabled={busy}
-                  onClick={() => void discard(activeBatch.id)}
+                  onClick={() =>
+                    void (confirmAction === 'discard'
+                      ? discard(activeBatch.id)
+                      : undo(activeBatch.id))
+                  }
+                  className="rounded bg-red-600 px-3 py-1 font-medium text-white hover:bg-red-700"
                 >
-                  Discard
+                  Confirm
                 </button>
-              </>
-            ) : null}
-            {activeBatch.status === 'committed' ? (
-              <button type="button" className="secondary" disabled={busy} onClick={() => void undo(activeBatch.id)}>
-                Undo import
-              </button>
-            ) : null}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2.5">
+                {activeBatch.status === 'staged' || activeBatch.status === 'reviewing' ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void sendToInbox()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500"
+                    >
+                      <Inbox className="h-3.5 w-3.5" />
+                      Send {activeBatch.totalLines} to Money Inbox
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !accountId || !defaultLedgerId}
+                      onClick={() => void commit()}
+                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                    >
+                      Bulk post directly
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmAction('discard')}
+                      className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Discard
+                    </button>
+                  </>
+                ) : null}
+
+                {activeBatch.status === 'committed' ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmAction('undo')}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3.5 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:bg-slate-900 dark:text-red-400"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Undo import
+                  </button>
+                ) : null}
+              </div>
+            )}
           </div>
-        </div>
+        </section>
       ) : null}
 
+      {/* Recent Batches List */}
       {batches.length > 0 ? (
-        <details>
-          <summary className="muted small">Recent imports ({batches.length})</summary>
-          <ul className="plain-list">
-            {batches.slice(0, 20).map((batch) => (
-              <li key={batch.id}>
-                <button type="button" className="link-button" onClick={() => setActiveBatchId(batch.id)}>
-                  {batch.fileName ?? batch.adapterId ?? 'Import'}
+        <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <div className="border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Import history ({batches.length})
+            </h3>
+          </div>
+          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+            {batches.slice(0, 15).map((batch) => (
+              <li key={batch.id} className="flex items-center justify-between gap-4 px-5 py-3 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setActiveBatchId(batch.id)}
+                  className="truncate text-left font-medium text-blue-700 hover:underline dark:text-blue-400"
+                >
+                  {batch.fileName ?? batch.adapterId ?? 'Imported statement'}
                 </button>
-                <span className="muted small">
-                  {' '}
-                  · {batch.status} · {batch.committedLines}/{batch.totalLines}
+                <span className="num-tabular shrink-0 text-xs text-slate-500 dark:text-slate-400">
+                  {batch.status} · {batch.committedLines}/{batch.totalLines} posted
                 </span>
               </li>
             ))}
           </ul>
-        </details>
+        </section>
       ) : null}
-    </section>
+    </div>
   );
 }
