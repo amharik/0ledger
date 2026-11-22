@@ -8,6 +8,7 @@ import {
   Database,
   ExternalLink,
   KeyRound,
+  Plus,
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
@@ -36,7 +37,7 @@ import {
   type LedgerVerification,
 } from '@/core/db/sqlite-mirror';
 import { trialBalance } from '@/core/ledger/reports';
-import type { DriveLink } from '@/core/model';
+import type { DriveLink, Workspace } from '@/core/model';
 import {
   GMAIL_SCOPES,
   buildAuthUrl,
@@ -91,6 +92,9 @@ const GMAIL_ORIGINS = [...DRIVE_ORIGINS, 'https://gmail.googleapis.com/*'];
 
 interface WorkspaceSettingsPanelProps {
   bundle: WorkspaceBundle;
+  workspaces?: Workspace[] | undefined;
+  onSelectWorkspace?: ((workspaceId: string) => void) | undefined;
+  onAddCompany?: (() => void) | undefined;
   onChanged?: ((message: string) => void) | undefined;
 }
 
@@ -119,7 +123,13 @@ async function requestChromeOrigins(origins: string[]): Promise<void> {
   }
 }
 
-export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsPanelProps) {
+export function WorkspaceSettingsPanel({
+  bundle,
+  workspaces = [],
+  onSelectWorkspace,
+  onAddCompany,
+  onChanged,
+}: WorkspaceSettingsPanelProps) {
   const workspaceId = bundle.workspace.id;
   const native = isNativeStoreAvailable();
   const hasChromeIdentity = typeof chrome !== 'undefined' && Boolean(chrome.identity);
@@ -136,6 +146,8 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
   const [pincode, setPincode] = useState(bundle.company.pincode ?? '');
   const [address, setAddress] = useState(bundle.company.address ?? '');
   const [booksBegin, setBooksBegin] = useState(bundle.company.booksBegin);
+  const [enableTally, setEnableTally] = useState(Boolean(bundle.company.settings.enableTally));
+  const [enableCaPack, setEnableCaPack] = useState(Boolean(bundle.company.settings.enableCaPack));
   const [savingCompany, setSavingCompany] = useState(false);
 
   // 2. Edition & License state
@@ -184,6 +196,8 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
     setPincode(bundle.company.pincode ?? '');
     setAddress(bundle.company.address ?? '');
     setBooksBegin(bundle.company.booksBegin);
+    setEnableTally(Boolean(bundle.company.settings.enableTally));
+    setEnableCaPack(Boolean(bundle.company.settings.enableCaPack));
   }, [bundle]);
 
   const refreshLicense = useCallback(async () => {
@@ -301,8 +315,10 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
         pincode,
         address,
         booksBegin,
+        enableTally,
+        enableCaPack,
       });
-      notify('Company profile updated.');
+      notify('Company profile and workflow preferences updated.');
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -625,6 +641,55 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
         </div>
       ) : null}
 
+      {/* Section 0: Companies & Workspaces */}
+      {(onAddCompany || workspaces.length > 0) ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-[#111827]">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  Companies on this device
+                </h3>
+              </div>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Each company keeps its own separate ledger, bank accounts, rules, and reports.
+              </p>
+            </div>
+            {onAddCompany ? (
+              <button
+                type="button"
+                onClick={onAddCompany}
+                className="inline-flex items-center justify-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add new company</span>
+              </button>
+            ) : null}
+          </div>
+
+          {workspaces.length > 1 && onSelectWorkspace ? (
+            <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                Switch active company ({workspaces.length} available)
+              </span>
+              <select
+                aria-label="Switch active company"
+                value={bundle.workspace.id}
+                onChange={(e) => onSelectWorkspace(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none sm:w-72 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              >
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       {/* Section 1: Company Profile */}
       <form
         onSubmit={handleSaveCompany}
@@ -634,7 +699,7 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
           <div className="flex items-center gap-2">
             <Building2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-              Company profile & GST identity
+              Company profile & optional workflows
             </h3>
           </div>
           <span className="num-tabular text-xs text-slate-500 dark:text-slate-400">
@@ -653,6 +718,9 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               required
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
+            <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+              Registered business or proprietor name printed on reports and statements.
+            </span>
           </label>
           <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -664,10 +732,13 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               placeholder="Operating brand name"
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
+            <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+              Customer-facing brand name if different from your legal name.
+            </span>
           </label>
-          <label className="block">
+          <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
-              GSTIN (15 chars)
+              GSTIN (optional · 15 chars)
             </span>
             <input
               value={gstin}
@@ -676,10 +747,14 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               maxLength={15}
               className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm uppercase text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
+            <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+              15-character Goods & Services Tax number. Adding a GSTIN unlocks GSTR-2B
+              reconciliation and GST invoice fields; leave blank if unregistered.
+            </span>
           </label>
-          <label className="block">
+          <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
-              PAN (10 chars)
+              PAN (optional · 10 chars)
             </span>
             <input
               value={pan}
@@ -688,8 +763,11 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               maxLength={10}
               className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm uppercase text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
+            <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+              10-character Permanent Account Number used for income tax and TDS filings.
+            </span>
           </label>
-          <label className="block">
+          <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
               State
             </span>
@@ -699,8 +777,11 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               placeholder="Maharashtra"
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
+            <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+              Home state for determining local vs inter-state billing when GST is active.
+            </span>
           </label>
-          <label className="block">
+          <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
               Books begin
             </span>
@@ -711,6 +792,10 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               required
               className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
+            <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+              Start of your accounting year (typically April 1). Earlier balances belong in account
+              opening balances.
+            </span>
           </label>
           <label className="block sm:col-span-2 lg:col-span-3">
             <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -735,6 +820,56 @@ export function WorkspaceSettingsPanel({ bundle, onChanged }: WorkspaceSettingsP
               className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
           </label>
+        </div>
+
+        {/* Optional Workflows: Tally & CA Pack */}
+        <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+          <div className="mb-3">
+            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+              Optional accounting workflows
+            </div>
+            <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Kept off by default to keep day-to-day bookkeeping clean. Enable only what your
+              business or accountant uses.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-slate-200 p-3 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40">
+              <input
+                type="checkbox"
+                checked={enableTally}
+                onChange={(e) => setEnableTally(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>
+                <span className="block text-xs font-medium text-slate-800 dark:text-slate-200">
+                  Enable Tally integration
+                </span>
+                <span className="mt-0.5 block text-[11px] text-slate-500 dark:text-slate-400">
+                  Unlocks Tally XML export/import, readiness checks, and the Tally Prime live
+                  bridge in Export & backup.
+                </span>
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-slate-200 p-3 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40">
+              <input
+                type="checkbox"
+                checked={enableCaPack}
+                onChange={(e) => setEnableCaPack(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>
+                <span className="block text-xs font-medium text-slate-800 dark:text-slate-200">
+                  Enable CA Pack & month-end close
+                </span>
+                <span className="mt-0.5 block text-[11px] text-slate-500 dark:text-slate-400">
+                  Unlocks the monthly close checklist, Ask CA queue, and CA handover pack
+                  generator on your Overview.
+                </span>
+              </span>
+            </label>
+          </div>
         </div>
 
         <div className="mt-4 flex justify-end">

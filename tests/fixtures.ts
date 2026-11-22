@@ -49,6 +49,8 @@ export function makeCompany(overrides: Partial<CompanyProfile> = {}): CompanyPro
       taxRoundingLevel: 'invoice',
       decimalPlaces: 2,
       defaultCurrency: 'INR',
+      enableTally: false,
+      enableCaPack: false,
     },
     createdAt: now,
     updatedAt: now,

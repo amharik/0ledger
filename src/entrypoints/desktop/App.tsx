@@ -136,6 +136,12 @@ export default function App() {
 
   const workspaceId = bundle?.workspace.id;
   const ledgerList = bundle?.ledgers ?? [];
+  const hasGstin = Boolean(bundle?.company.gstin?.trim());
+  const enableTally = Boolean(bundle?.company.settings.enableTally);
+  const enableCaPack = Boolean(bundle?.company.settings.enableCaPack);
+  const visibleReportTabs = hasGstin
+    ? REPORT_TABS
+    : REPORT_TABS.filter((tab) => tab.id !== 'gstr2b');
 
   // Sync dark mode class on <html>
   useEffect(() => {
@@ -189,23 +195,36 @@ export default function App() {
     [reload],
   );
 
-  const handleNavigate = useCallback((target: OverviewNavigateTarget) => {
-    setSection(target.section);
-    if (target.section === 'activity' && isActivityTab(target.subTab)) {
-      setActivityTab(target.subTab);
-    } else if (target.section === 'reports' && isReportTab(target.subTab)) {
-      setReportTab(target.subTab);
-    } else if (target.section === 'books' && isBooksTab(target.subTab)) {
-      setBooksTab(target.subTab);
+  // If GSTIN is removed or missing, leave the GST (2B) tab automatically
+  useEffect(() => {
+    if (!hasGstin && reportTab === 'gstr2b') {
+      setReportTab('pnl');
     }
-    setMobileMenuOpen(false);
-  }, []);
+  }, [hasGstin, reportTab]);
+
+  const handleNavigate = useCallback(
+    (target: OverviewNavigateTarget) => {
+      setSection(target.section);
+      if (target.section === 'activity' && isActivityTab(target.subTab)) {
+        setActivityTab(target.subTab);
+        if (target.subTab === 'import') {
+          setImportMode('email');
+        }
+      } else if (target.section === 'reports' && isReportTab(target.subTab)) {
+        setReportTab(target.subTab === 'gstr2b' && !hasGstin ? 'pnl' : target.subTab);
+      } else if (target.section === 'books' && isBooksTab(target.subTab)) {
+        setBooksTab(target.subTab);
+      }
+      setMobileMenuOpen(false);
+    },
+    [hasGstin],
+  );
 
   const currentSubLabel =
     section === 'activity'
       ? ACTIVITY_TABS.find((t) => t.id === activityTab)?.label
       : section === 'reports'
-        ? REPORT_TABS.find((t) => t.id === reportTab)?.label
+        ? visibleReportTabs.find((t) => t.id === reportTab)?.label
         : section === 'books'
           ? BOOKS_TABS.find((t) => t.id === booksTab)?.label
           : undefined;
@@ -261,40 +280,40 @@ export default function App() {
           </button>
         </div>
 
-        {/* Company switcher */}
+        {/* Active Company (manage/add companies in Books -> Settings) */}
         {bundle ? (
           <div className="border-b border-slate-200 px-4 py-3.5 dark:border-slate-800">
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
-              <Building2 className="h-3.5 w-3.5" />
-              <span>Company</span>
-            </label>
-            <select
-              aria-label="Active company"
-              value={bundle.workspace.id}
-              onChange={(event) => {
-                setShowNewCompany(false);
-                void selectWorkspace(event.target.value);
-                setMobileMenuOpen(false);
-              }}
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-            >
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => {
-                setShowNewCompany(true);
-                setMobileMenuOpen(false);
-              }}
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Add company</span>
-            </button>
+            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+              <Building2 className="h-3 w-3" />
+              <span>Workspace</span>
+            </div>
+            {workspaces.length > 1 ? (
+              <select
+                aria-label="Active company"
+                value={bundle.workspace.id}
+                onChange={(event) => {
+                  setShowNewCompany(false);
+                  void selectWorkspace(event.target.value);
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              >
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+                {bundle.workspace.name}
+              </div>
+            )}
+            <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+              {[hasGstin ? 'GST enabled' : 'Non-GST', bundle.company.state]
+                .filter(Boolean)
+                .join(' · ')}
+            </div>
           </div>
         ) : null}
 
@@ -493,7 +512,7 @@ export default function App() {
                 : null}
 
               {section === 'reports'
-                ? REPORT_TABS.map((tab) => {
+                ? visibleReportTabs.map((tab) => {
                     const active = reportTab === tab.id;
                     return (
                       <button
@@ -561,6 +580,9 @@ export default function App() {
                 <OverviewDashboard
                   workspaceId={bundle.workspace.id}
                   ledgers={ledgerList}
+                  hasGstin={hasGstin}
+                  enableTally={enableTally}
+                  enableCaPack={enableCaPack}
                   refreshToken={refreshToken}
                   onChanged={handleDataChanged}
                   onNavigate={handleNavigate}
@@ -708,7 +730,7 @@ export default function App() {
                       onTabChange={(next) => setReportTab(next)}
                     />
                   ) : null}
-                  {reportTab === 'gstr2b' ? (
+                  {reportTab === 'gstr2b' && hasGstin ? (
                     <Gstr2bReconPanel
                       workspaceId={bundle.workspace.id}
                       refreshToken={refreshToken}
@@ -726,6 +748,8 @@ export default function App() {
                   {booksTab === 'accounts' ? (
                     <ChartOfAccounts
                       workspaceId={bundle.workspace.id}
+                      hasGstin={hasGstin}
+                      enableTally={enableTally}
                       onChanged={handleDataChanged}
                     />
                   ) : null}
@@ -738,6 +762,7 @@ export default function App() {
                   {booksTab === 'stock-items' ? (
                     <StockItemsPanel
                       workspaceId={bundle.workspace.id}
+                      hasGstin={hasGstin}
                       onChanged={handleDataChanged}
                     />
                   ) : null}
@@ -756,12 +781,23 @@ export default function App() {
                   {booksTab === 'export' ? (
                     <BooksExportPanel
                       workspaceId={bundle.workspace.id}
+                      enableTally={enableTally}
+                      onOpenSettings={() => {
+                        setSection('books');
+                        setBooksTab('settings');
+                      }}
                       onChanged={handleDataChanged}
                     />
                   ) : null}
                   {booksTab === 'settings' ? (
                     <WorkspaceSettingsPanel
                       bundle={bundle}
+                      workspaces={workspaces}
+                      onSelectWorkspace={(id) => {
+                        setShowNewCompany(false);
+                        void selectWorkspace(id);
+                      }}
+                      onAddCompany={() => setShowNewCompany(true)}
                       onChanged={handleDataChanged}
                     />
                   ) : null}
@@ -780,6 +816,7 @@ export default function App() {
           ledgers={ledgerList}
           parties={parties}
           stockItems={stockItems}
+          hasGstin={hasGstin}
           onClose={() => setEntryDrawerOpen(false)}
           onPosted={(message) => {
             setEntryDrawerOpen(false);

@@ -40,6 +40,8 @@ export interface CreateWorkspaceInput {
   booksBegin?: string;
   roundToMinor?: number;
   roundingMode?: RoundingMode;
+  enableTally?: boolean;
+  enableCaPack?: boolean;
 }
 
 export interface WorkspaceBundle {
@@ -102,6 +104,8 @@ export async function createWorkspace(
         taxRoundingLevel: 'invoice',
         decimalPlaces: 2,
         defaultCurrency: input.currency ?? 'INR',
+        enableTally: input.enableTally ?? false,
+        enableCaPack: input.enableCaPack ?? false,
       },
       createdAt: now,
       updatedAt: now,
@@ -250,6 +254,8 @@ export interface UpdateCompanyProfileInput {
   address?: string;
   booksBegin?: string;
   fyStartMonth?: number;
+  enableTally?: boolean;
+  enableCaPack?: boolean;
 }
 
 export async function updateCompanyProfile(
@@ -294,6 +300,8 @@ export async function updateCompanyProfile(
       settings: {
         ...current.settings,
         ...(input.fyStartMonth !== undefined ? { fyStartMonth: input.fyStartMonth } : {}),
+        ...(input.enableTally !== undefined ? { enableTally: input.enableTally } : {}),
+        ...(input.enableCaPack !== undefined ? { enableCaPack: input.enableCaPack } : {}),
       },
       createdAt: current.createdAt,
       updatedAt: nowIso(),

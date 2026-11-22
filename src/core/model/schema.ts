@@ -92,6 +92,8 @@ export const CompanySettingsSchema = z
     taxRoundingLevel: TaxRoundingLevelSchema.default('invoice'),
     decimalPlaces: z.number().int().min(0).max(6).default(2),
     defaultCurrency: currencyCode.default('INR'),
+    enableTally: z.boolean().default(false),
+    enableCaPack: z.boolean().default(false),
   })
   .strict();
 

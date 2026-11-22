@@ -15,6 +15,7 @@ const METHODS: Array<{ value: ValuationMethod; label: string }> = [
 
 interface Props {
   workspaceId: string;
+  hasGstin?: boolean | undefined;
   onChanged?: ((message: string) => void) | undefined;
 }
 
@@ -27,7 +28,7 @@ function optionalAmount(value: string): number | undefined {
   return trimmed ? parseAmountToMinor(trimmed) : undefined;
 }
 
-export default function StockItemsPanel({ workspaceId, onChanged }: Props) {
+export default function StockItemsPanel({ workspaceId, hasGstin = false, onChanged }: Props) {
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -74,7 +75,7 @@ export default function StockItemsPanel({ workspaceId, onChanged }: Props) {
         workspaceId,
         name: name.trim(),
         uom: uom.trim() || 'NOS',
-        ...(hsnSac.trim() ? { hsnSac: hsnSac.trim() } : {}),
+        ...(hasGstin && hsnSac.trim() ? { hsnSac: hsnSac.trim() } : {}),
         ...(rateMinor !== undefined ? { rateMinor } : {}),
         ...(openingQuantity.trim() ? { openingQuantity: openingQuantity.trim() } : {}),
         ...(openingValueMinor !== undefined ? { openingValueMinor } : {}),
@@ -194,18 +195,26 @@ export default function StockItemsPanel({ workspaceId, onChanged }: Props) {
                 placeholder="NOS"
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
-                HSN / SAC
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                Unit of measure (e.g. NOS, KG, HRS, BOX).
               </span>
-              <input
-                value={hsnSac}
-                onChange={(event) => setHsnSac(event.target.value)}
-                placeholder="998314"
-                className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-              />
             </label>
+            {hasGstin ? (
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                  HSN / SAC
+                </span>
+                <input
+                  value={hsnSac}
+                  onChange={(event) => setHsnSac(event.target.value)}
+                  placeholder="998314"
+                  className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+                <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                  GST classification code for goods (HSN) or services (SAC).
+                </span>
+              </label>
+            ) : null}
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
                 Default rate
@@ -257,6 +266,9 @@ export default function StockItemsPanel({ workspaceId, onChanged }: Props) {
                   </option>
                 ))}
               </select>
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                How cost of stock sold is calculated (Weighted average suits most businesses).
+              </span>
             </label>
           </div>
           <div className="mt-4 flex justify-end gap-2">
@@ -309,7 +321,7 @@ export default function StockItemsPanel({ workspaceId, onChanged }: Props) {
                 {items.map((item) => {
                   const meta = [
                     item.uom,
-                    item.hsnSac ? `HSN ${item.hsnSac}` : '',
+                    hasGstin && item.hsnSac ? `HSN ${item.hsnSac}` : '',
                     item.rateMinor !== undefined ? `Rate ${formatMinor(item.rateMinor)}` : '',
                     item.archived ? 'Archived' : '',
                   ]

@@ -40,6 +40,9 @@ export interface OverviewNavigateTarget {
 interface Props {
   workspaceId: string;
   ledgers: Ledger[];
+  hasGstin: boolean;
+  enableTally: boolean;
+  enableCaPack: boolean;
   refreshToken: number;
   onChanged: (message: string) => void;
   onNavigate: (target: OverviewNavigateTarget) => void;
@@ -77,6 +80,9 @@ function readinessText(status: string): { label: string; colorClass: string } {
 export function OverviewDashboard({
   workspaceId,
   ledgers,
+  hasGstin,
+  enableTally,
+  enableCaPack,
   refreshToken,
   onChanged,
   onNavigate,
@@ -211,13 +217,15 @@ export function OverviewDashboard({
             Financial overview
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Live cash position, pending tasks, and monthly close readiness.
+            {enableCaPack
+              ? 'Live cash position, quick actions, and monthly close readiness.'
+              : 'Live cash position, quick actions, and recent bookkeeping activity.'}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-            <span>Close period</span>
+            <span>Period</span>
             <input
               type="month"
               value={period}
@@ -299,17 +307,27 @@ export function OverviewDashboard({
 
         <div className="p-5">
           <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Close readiness ({period})
+            {enableCaPack ? `Close readiness (${period})` : `Bank matching (${period})`}
           </div>
           <div className="mt-2 flex items-baseline gap-2.5">
-            <span className="num-tabular text-2xl font-semibold text-slate-900 dark:text-slate-100">
-              {loading || !readiness ? '—' : `${readiness.score}/100`}
-            </span>
-            {statusMeta ? (
-              <span className={`text-xs font-medium ${statusMeta.colorClass}`}>
-                {statusMeta.label}
+            {enableCaPack ? (
+              <>
+                <span className="num-tabular text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                  {loading || !readiness ? '—' : `${readiness.score}/100`}
+                </span>
+                {statusMeta ? (
+                  <span className={`text-xs font-medium ${statusMeta.colorClass}`}>
+                    {statusMeta.label}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span className="num-tabular text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                {loading || !cockpit
+                  ? '—'
+                  : `${cockpit.cash.reconciledLines}/${cockpit.cash.totalLines}`}
               </span>
-            ) : null}
+            )}
           </div>
           <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
             {cockpit
@@ -319,105 +337,147 @@ export function OverviewDashboard({
         </div>
       </section>
 
-      {/* Actionable Workflow Shortcuts — what needs attention right now */}
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <button
-          type="button"
-          onClick={() => onNavigate({ section: 'activity', subTab: 'import' })}
-          className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
-        >
+      {/* Quick Actions */}
+      <section aria-labelledby="quick-actions-heading" className="space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-              <Mail className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Email import</span>
-            </div>
-            <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400">
-              {mailboxCount > 0
-                ? `${mailboxCount} IMAP account${mailboxCount === 1 ? '' : 's'} ready. Pull bank alerts and bills.`
-                : 'Connect Gmail or Outlook IMAP to pull ledgers automatically.'}
+            <h2
+              id="quick-actions-heading"
+              className="text-sm font-semibold text-slate-900 dark:text-slate-100"
+            >
+              Quick actions
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Jump directly to your most frequent bookkeeping tasks.
             </p>
           </div>
-          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-        </button>
+        </div>
 
-        <button
-          type="button"
-          onClick={() => onNavigate({ section: 'activity', subTab: 'inbox' })}
-          className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
+        <div
+          className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${
+            hasGstin ? 'lg:grid-cols-5' : 'lg:grid-cols-4'
+          }`}
         >
-          <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-              <Inbox className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              <span>Money inbox</span>
-            </div>
-            <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400">
-              {inboxCount > 0
-                ? `${inboxCount} transaction${inboxCount === 1 ? '' : 's'} waiting to categorize and post.`
-                : 'Inbox is clear. Drop a statement or email alert to extract new entries.'}
-            </p>
-          </div>
-          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onNavigate({ section: 'activity', subTab: 'reconcile' })}
-          className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
-        >
-          <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-              <Scale className="h-4 w-4 text-slate-600 dark:text-slate-400" />
-              <span>Bank matching</span>
-            </div>
-            <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400">
-              {cockpit && cockpit.cash.unreconciledLines > 0
-                ? `${cockpit.cash.unreconciledLines} statement line${cockpit.cash.unreconciledLines === 1 ? '' : 's'} need voucher confirmation.`
-                : 'All imported bank lines are matched against ledger vouchers.'}
-            </p>
-          </div>
-          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onNavigate({ section: 'reports', subTab: 'gstr2b' })}
-          className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
-        >
-          <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-              <FileSpreadsheet className="h-4 w-4 text-slate-600 dark:text-slate-400" />
-              <span>GSTR-2B ITC check</span>
-            </div>
-            <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400">
-              Upload your portal JSON or CSV to spot missing vendor filings before GSTR-3B.
-            </p>
-          </div>
-          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-        </button>
-      </section>
-
-      {/* Main Split: Month-End Close & CA Pack (Left 8 cols) + Recent Vouchers (Right 4 cols) */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <section className="rounded-xl border border-slate-200 bg-white lg:col-span-8 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => onNavigate({ section: 'activity', subTab: 'import' })}
+            className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
+          >
             <div>
-              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                Month-end close &amp; CA pack
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Resolve blockers or flag questions for your CA, then export Tally XML, trial balance, and schedules in one pack.
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                <Mail className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Import from Email</span>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                {mailboxCount > 0
+                  ? `${mailboxCount} IMAP account${mailboxCount === 1 ? '' : 's'} ready to fetch.`
+                  : 'Pull bank alerts and statements via IMAP.'}
               </p>
             </div>
+            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate({ section: 'activity', subTab: 'inbox' })}
+            className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
+          >
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                <Inbox className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <span>Review Money Inbox</span>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                {inboxCount > 0
+                  ? `${inboxCount} transaction${inboxCount === 1 ? '' : 's'} waiting to categorize.`
+                  : 'Inbox is clear. Categorize imported items here.'}
+              </p>
+            </div>
+            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate({ section: 'activity', subTab: 'reconcile' })}
+            className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
+          >
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                <Scale className="h-4 w-4 text-slate-600 dark:text-slate-400" />
+                <span>Reconcile Bank</span>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                {cockpit && cockpit.cash.unreconciledLines > 0
+                  ? `${cockpit.cash.unreconciledLines} statement line${cockpit.cash.unreconciledLines === 1 ? '' : 's'} need matching.`
+                  : 'Verify bank statements against your ledger.'}
+              </p>
+            </div>
+            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate({ section: 'books', subTab: 'export' })}
+            className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
+          >
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                <Download className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Export Books</span>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                Download Excel workbook, CSV reports, or an encrypted backup.
+              </p>
+            </div>
+            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+
+          {hasGstin ? (
             <button
               type="button"
-              disabled={busy || loading}
-              onClick={() => void handleGeneratePack()}
-              className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap dark:bg-blue-600 dark:hover:bg-blue-500"
+              onClick={() => onNavigate({ section: 'reports', subTab: 'gstr2b' })}
+              className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-slate-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 dark:hover:bg-slate-800/60"
             >
-              <Download className="h-4 w-4" />
-              <span>{busy ? 'Generating…' : 'Generate CA pack'}</span>
+              <div>
+                <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                  <FileSpreadsheet className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <span>Check GST Alerts</span>
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                  Spot GSTR-2B credit mismatches and missing vendor filings.
+                </p>
+              </div>
+              <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             </button>
-          </div>
+          ) : null}
+        </div>
+      </section>
+
+      {/* Main Split: Month-End Close & CA Pack (if enabled) OR Cash & Book Health (Left 8 cols) + Recent Vouchers (Right 4 cols) */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {enableCaPack ? (
+          <section className="rounded-xl border border-slate-200 bg-white lg:col-span-8 dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Month-end close &amp; CA pack
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  {enableTally
+                    ? 'Resolve blockers or flag questions for your CA, then export Tally XML, trial balance, and schedules in one pack.'
+                    : 'Resolve blockers or flag questions for your CA, then export trial balance and schedules in one pack.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy || loading}
+                onClick={() => void handleGeneratePack()}
+                className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap dark:bg-blue-600 dark:hover:bg-blue-500"
+              >
+                <Download className="h-4 w-4" />
+                <span>{busy ? 'Generating…' : 'Generate CA pack'}</span>
+              </button>
+            </div>
 
           <div className="p-6 space-y-6">
             {cockpit ? (
@@ -447,7 +507,9 @@ export function OverviewDashboard({
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">Captured GST/TDS</div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {hasGstin ? 'Captured GST/TDS' : 'Captured TDS / tax'}
+                  </div>
                   <div className="num-tabular mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
                     {formatMinor(cockpit.tax.totalMinor)}
                   </div>
@@ -591,6 +653,90 @@ export function OverviewDashboard({
             ) : null}
           </div>
         </section>
+        ) : (
+          <section className="rounded-xl border border-slate-200 bg-white lg:col-span-8 dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Cash &amp; ledger check ({period})
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  Compares imported bank statement totals with your recorded ledger entries so
+                  nothing is missed.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate({ section: 'activity', subTab: 'reconcile' })}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3.5 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Scale className="h-3.5 w-3.5" />
+                <span>Open reconciliation</span>
+              </button>
+            </div>
+
+            <div className="space-y-5 p-6">
+              {cockpit ? (
+                <div className="grid grid-cols-1 gap-4 border-b border-slate-200 pb-5 sm:grid-cols-3 dark:border-slate-800">
+                  <div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Bank statement net
+                    </div>
+                    <div className="num-tabular mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                      {formatMinor(cockpit.cash.statementNetMinor)}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      Total inflow minus outflow from imported statements
+                    </p>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Ledger bank net
+                    </div>
+                    <div className="num-tabular mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                      {formatMinor(cockpit.cash.ledgerNetMinor)}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      Total recorded in your bank accounts this month
+                    </p>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Difference</div>
+                    <div
+                      className={`num-tabular mt-1 text-base font-semibold ${
+                        cockpit.cash.differenceMinor === 0
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-red-700 dark:text-red-400'
+                      }`}
+                    >
+                      {formatMinor(cockpit.cash.differenceMinor)}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      {cockpit.cash.differenceMinor === 0
+                        ? 'Bank and ledger match cleanly'
+                        : 'Categorize or match remaining lines to zero out'}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-4 py-3.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-400">
+                <span>
+                  {inboxCount > 0
+                    ? `${inboxCount} imported transaction(s) waiting in Money inbox.`
+                    : 'All imported transactions are categorized and posted.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onNavigate({ section: 'books', subTab: 'settings' })}
+                  className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  Need CA Pack &amp; close checklist? Enable in Settings
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* Right column: Recent Ledger Entries */}
         <section className="rounded-xl border border-slate-200 bg-white lg:col-span-4 dark:border-slate-800 dark:bg-slate-900">

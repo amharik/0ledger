@@ -83,6 +83,7 @@ function errorMessage(cause: unknown): string {
 interface Props {
   open: boolean;
   workspaceId: string;
+  hasGstin?: boolean;
   ledgers: Ledger[];
   parties: PartyView[];
   stockItems: StockItem[];
@@ -93,6 +94,7 @@ interface Props {
 export function QuickEntryDrawer({
   open,
   workspaceId,
+  hasGstin = false,
   ledgers,
   parties,
   stockItems,
@@ -305,7 +307,7 @@ export function QuickEntryDrawer({
 
     const taxAllocations: TaxAllocationInput[] = [];
     try {
-      if (taxAmount.trim()) {
+      if (hasGstin && taxAmount.trim()) {
         taxAllocations.push(
           compact({
             taxType,
@@ -376,9 +378,11 @@ export function QuickEntryDrawer({
         ...(dueDate ? { dueDate } : {}),
         partyLedgerId,
         ...(invoiceNarration.trim() ? { narration: invoiceNarration.trim() } : {}),
-        ...(placeOfSupply.trim() ? { placeOfSupply: placeOfSupply.trim() } : {}),
-        ...(gstRegistration.trim() ? { gstRegistration: gstRegistration.trim().toUpperCase() } : {}),
-        reverseCharge,
+        ...(hasGstin && placeOfSupply.trim() ? { placeOfSupply: placeOfSupply.trim() } : {}),
+        ...(hasGstin && gstRegistration.trim()
+          ? { gstRegistration: gstRegistration.trim().toUpperCase() }
+          : {}),
+        reverseCharge: hasGstin ? reverseCharge : false,
         status: 'regular',
         currency: 'INR',
         source: 'manual',
@@ -524,6 +528,16 @@ export function QuickEntryDrawer({
                 </div>
               </div>
 
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {voucherType === 'Payment'
+                  ? 'Payment: money leaving your bank or cash account (e.g. rent, bills, vendor payout).'
+                  : voucherType === 'Receipt'
+                    ? 'Receipt: money coming into your bank or cash account (e.g. customer payment, refund).'
+                    : voucherType === 'Contra'
+                      ? 'Contra: internal transfer between your own bank and cash accounts.'
+                      : 'Journal: non-cash adjustment between accounts (e.g. depreciation, accruals, provisions).'}
+              </p>
+
               <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
                   Narration
@@ -535,10 +549,13 @@ export function QuickEntryDrawer({
                   placeholder="e.g. Monthly broadband bill paid via NEFT"
                   className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                 />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  A short plain-English note describing what this transaction was for.
+                </p>
               </div>
 
               <div>
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-1 flex items-center justify-between">
                   <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
                     Ledger lines
                   </span>
@@ -551,6 +568,10 @@ export function QuickEntryDrawer({
                     Add line
                   </button>
                 </div>
+                <p className="mb-2.5 text-xs text-slate-500 dark:text-slate-400">
+                  Double-entry rule: Debit (Dr) what comes in or expenses; Credit (Cr) what goes out
+                  or income. Totals must match.
+                </p>
 
                 <div className="space-y-2.5">
                   {lines.map((line) => (
@@ -802,12 +823,23 @@ export function QuickEntryDrawer({
                   onClick={() => setShowTaxFields((v) => !v)}
                   className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-400"
                 >
-                  {showTaxFields ? 'Hide GST, TDS & narration fields' : '+ Add GST, TDS & narration details'}
+                  {showTaxFields
+                    ? hasGstin
+                      ? 'Hide GST, TDS & narration fields'
+                      : 'Hide TDS & narration fields'
+                    : hasGstin
+                      ? '+ Add GST, TDS & narration details'
+                      : '+ Add TDS & narration details'}
                 </button>
+                {!hasGstin ? (
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    GST fields are hidden because no GSTIN is configured for this company.
+                  </p>
+                ) : null}
 
                 {showTaxFields ? (
                   <div className="mt-4 space-y-4">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className={`grid grid-cols-1 gap-3 ${hasGstin ? 'sm:grid-cols-2' : ''}`}>
                       <div>
                         <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
                           Narration
@@ -815,123 +847,136 @@ export function QuickEntryDrawer({
                         <input
                           value={invoiceNarration}
                           onChange={(e) => setInvoiceNarration(e.target.value)}
+                          placeholder="Short description for your records"
                           className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          Place of supply
-                        </label>
-                        <input
-                          value={placeOfSupply}
-                          onChange={(e) => setPlaceOfSupply(e.target.value)}
-                          placeholder="Karnataka"
-                          className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
-                        />
-                      </div>
+                      {hasGstin ? (
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            Place of supply
+                          </label>
+                          <input
+                            value={placeOfSupply}
+                            onChange={(e) => setPlaceOfSupply(e.target.value)}
+                            placeholder="Karnataka"
+                            className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
+                      ) : null}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          GST type
-                        </label>
-                        <select
-                          value={taxType}
-                          onChange={(e) => setTaxType(e.target.value as TaxType)}
-                          className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
-                        >
-                          {TAX_TYPES.map((t) => (
-                            <option key={t} value={t}>
-                              {t}
-                            </option>
-                          ))}
-                        </select>
+                    {hasGstin ? (
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            GST type
+                          </label>
+                          <select
+                            value={taxType}
+                            onChange={(e) => setTaxType(e.target.value as TaxType)}
+                            className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                          >
+                            {TAX_TYPES.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            GST rate (%)
+                          </label>
+                          <input
+                            value={taxRate}
+                            onChange={(e) => setTaxRate(e.target.value)}
+                            placeholder="18"
+                            className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            GST amount
+                          </label>
+                          <input
+                            inputMode="decimal"
+                            value={taxAmount}
+                            onChange={(e) => setTaxAmount(e.target.value)}
+                            placeholder="0.00"
+                            className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          GST rate (%)
-                        </label>
-                        <input
-                          value={taxRate}
-                          onChange={(e) => setTaxRate(e.target.value)}
-                          placeholder="18"
-                          className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
-                        />
+                    ) : null}
+
+                    <div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            TDS section
+                          </label>
+                          <input
+                            value={tdsSection}
+                            onChange={(e) => setTdsSection(e.target.value)}
+                            placeholder="194J"
+                            className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            TDS rate (%)
+                          </label>
+                          <input
+                            value={tdsRate}
+                            onChange={(e) => setTdsRate(e.target.value)}
+                            placeholder="10"
+                            className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            TDS amount
+                          </label>
+                          <input
+                            inputMode="decimal"
+                            value={tdsAmount}
+                            onChange={(e) => setTdsAmount(e.target.value)}
+                            placeholder="0.00"
+                            className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          GST amount
-                        </label>
-                        <input
-                          inputMode="decimal"
-                          value={taxAmount}
-                          onChange={(e) => setTaxAmount(e.target.value)}
-                          placeholder="0.00"
-                          className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm dark:border-slate-700 dark:bg-slate-950"
-                        />
-                      </div>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        TDS (Tax Deducted at Source): fill only if tax is withheld on professional
+                        or contractor payments.
+                      </p>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          TDS section
+                    {hasGstin ? (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                            Party GSTIN
+                          </label>
+                          <input
+                            value={gstRegistration}
+                            onChange={(e) => setGstRegistration(e.target.value.toUpperCase())}
+                            placeholder="29ABCDE1234F1Z5"
+                            className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm uppercase dark:border-slate-700 dark:bg-slate-950"
+                          />
+                        </div>
+                        <label className="flex items-center gap-2 pb-1.5 text-sm text-slate-700 dark:text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={reverseCharge}
+                            onChange={(e) => setReverseCharge(e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span>Reverse charge applicable</span>
                         </label>
-                        <input
-                          value={tdsSection}
-                          onChange={(e) => setTdsSection(e.target.value)}
-                          placeholder="194J"
-                          className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
-                        />
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          TDS rate (%)
-                        </label>
-                        <input
-                          value={tdsRate}
-                          onChange={(e) => setTdsRate(e.target.value)}
-                          placeholder="10"
-                          className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          TDS amount
-                        </label>
-                        <input
-                          inputMode="decimal"
-                          value={tdsAmount}
-                          onChange={(e) => setTdsAmount(e.target.value)}
-                          placeholder="0.00"
-                          className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm dark:border-slate-700 dark:bg-slate-950"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                          Party GSTIN
-                        </label>
-                        <input
-                          value={gstRegistration}
-                          onChange={(e) => setGstRegistration(e.target.value.toUpperCase())}
-                          placeholder="29ABCDE1234F1Z5"
-                          className="num-tabular mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm uppercase dark:border-slate-700 dark:bg-slate-950"
-                        />
-                      </div>
-                      <label className="flex items-center gap-2 pb-1.5 text-sm text-slate-700 dark:text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={reverseCharge}
-                          onChange={(e) => setReverseCharge(e.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        <span>Reverse charge applicable</span>
-                      </label>
-                    </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

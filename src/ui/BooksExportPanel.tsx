@@ -45,7 +45,9 @@ import {
 
 interface Props {
   workspaceId: string;
+  enableTally?: boolean;
   onChanged?: ((message: string) => void) | undefined;
+  onOpenSettings?: (() => void) | undefined;
 }
 
 function errorMessage(cause: unknown): string {
@@ -76,7 +78,12 @@ function safeFilename(value: string): string {
   return value.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || '0ledger';
 }
 
-export function BooksExportPanel({ workspaceId, onChanged }: Props) {
+export function BooksExportPanel({
+  workspaceId,
+  enableTally = false,
+  onChanged,
+  onOpenSettings,
+}: Props) {
   const [data, setData] = useState<WorkbookData>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
@@ -352,11 +359,11 @@ export function BooksExportPanel({ workspaceId, onChanged }: Props) {
     <div className="space-y-6">
       <div>
         <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-50">
-          Export & backup
+          Export &amp; backup
         </h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Your books stay in open formats. Export for your CA or Tally, or keep an encrypted local
-          backup.
+          Your books stay in open formats. Download spreadsheets or reports anytime, and keep an
+          encrypted offline backup on your computer.
         </p>
       </div>
 
@@ -386,12 +393,15 @@ export function BooksExportPanel({ workspaceId, onChanged }: Props) {
       {/* Section 1: Standard Exports */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-[#111827]">
-          <div className="mb-4 flex items-center gap-2">
+          <div className="mb-1 flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-              Accounting & Tally exports
+              {enableTally ? 'Accounting & Tally exports' : 'Accounting exports'}
             </h3>
           </div>
+          <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+            Open in Excel, Google Sheets, or share with an accountant.
+          </p>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
@@ -403,32 +413,36 @@ export function BooksExportPanel({ workspaceId, onChanged }: Props) {
               <span>Full Excel workbook (.xlsx with formulas)</span>
               <Download className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                exportFile('xml', 'application/xml', 'tally-masters', (current) =>
-                  exportTallyMasters(current, { allowIncomplete }),
-                )
-              }
-              className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm font-medium text-slate-800 transition hover:border-indigo-300 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              <span>Tally masters XML</span>
-              <Download className="h-4 w-4 text-slate-400" />
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                exportFile('xml', 'application/xml', 'tally-vouchers', (current) =>
-                  exportTallyVouchers(current, { allowIncomplete }),
-                )
-              }
-              className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm font-medium text-slate-800 transition hover:border-indigo-300 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              <span>Tally vouchers XML</span>
-              <Download className="h-4 w-4 text-slate-400" />
-            </button>
+            {enableTally ? (
+              <>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    exportFile('xml', 'application/xml', 'tally-masters', (current) =>
+                      exportTallyMasters(current, { allowIncomplete }),
+                    )
+                  }
+                  className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm font-medium text-slate-800 transition hover:border-indigo-300 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  <span>Tally masters XML</span>
+                  <Download className="h-4 w-4 text-slate-400" />
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    exportFile('xml', 'application/xml', 'tally-vouchers', (current) =>
+                      exportTallyVouchers(current, { allowIncomplete }),
+                    )
+                  }
+                  className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm font-medium text-slate-800 transition hover:border-indigo-300 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  <span>Tally vouchers XML</span>
+                  <Download className="h-4 w-4 text-slate-400" />
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               disabled={busy}
@@ -499,63 +513,74 @@ export function BooksExportPanel({ workspaceId, onChanged }: Props) {
             </button>
           </div>
 
-          {/* Tally readiness check */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 dark:border-slate-800">
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-              <input
-                type="checkbox"
-                checked={allowIncomplete}
-                onChange={(event) => setAllowIncomplete(event.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span>Allow partial Tally XML export</span>
-            </label>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={checkReadiness}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              <span>Run Tally readiness check</span>
-            </button>
-          </div>
+          {/* Tally readiness check (only when Tally integration is enabled) */}
+          {enableTally ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 dark:border-slate-800">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={allowIncomplete}
+                  onChange={(event) => setAllowIncomplete(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>Allow partial Tally XML export</span>
+              </label>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={checkReadiness}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>Run Tally readiness check</span>
+              </button>
+            </div>
+          ) : null}
         </section>
 
         {/* Section 2: Import Ledger Data */}
         <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-[#111827]">
-          <div className="mb-4 flex items-center gap-2">
+          <div className="mb-1 flex items-center gap-2">
             <FileCode2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-              Import from Tally or Beancount
+              {enableTally ? 'Import from Tally or Beancount' : 'Import plain-text ledger'}
             </h3>
           </div>
+          <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+            Bring existing accounting history into this company without re-entering entries.
+          </p>
 
           <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
-                Tally Prime XML (masters or vouchers)
-              </label>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <input
-                  type="file"
-                  accept=".xml,application/xml,text/xml"
-                  onChange={(event) => setTallyFile(event.target.files?.[0])}
-                  className="block flex-1 text-xs text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200 dark:text-slate-400 dark:file:bg-slate-800 dark:file:text-slate-200"
-                />
-                <button
-                  type="button"
-                  disabled={busy || !tallyFile}
-                  onClick={() => void handleImportTally()}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  <span>Import XML</span>
-                </button>
+            {enableTally ? (
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
+                  Tally Prime XML (masters or vouchers)
+                </label>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    type="file"
+                    accept=".xml,application/xml,text/xml"
+                    onChange={(event) => setTallyFile(event.target.files?.[0])}
+                    className="block flex-1 text-xs text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200 dark:text-slate-400 dark:file:bg-slate-800 dark:file:text-slate-200"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !tallyFile}
+                    onClick={() => void handleImportTally()}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    <span>Import XML</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : null}
 
-            <div className="space-y-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <div
+              className={`space-y-2 ${
+                enableTally ? 'border-t border-slate-100 pt-4 dark:border-slate-800' : ''
+              }`}
+            >
               <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
                 Beancount file (.beancount / .bean)
               </label>
@@ -577,6 +602,20 @@ export function BooksExportPanel({ workspaceId, onChanged }: Props) {
                 </button>
               </div>
             </div>
+
+            {!enableTally && onOpenSettings ? (
+              <div className="border-t border-slate-100 pt-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                Using Tally Prime?{' '}
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  Enable Tally integration in Settings
+                </button>{' '}
+                to unlock Tally XML export, import, and live bridge.
+              </div>
+            ) : null}
           </div>
         </section>
       </div>
@@ -681,69 +720,71 @@ export function BooksExportPanel({ workspaceId, onChanged }: Props) {
         </div>
       </section>
 
-      {/* Section 4: Collapsible Tally Prime Live Bridge */}
-      <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-[#111827]">
-        <button
-          type="button"
-          onClick={() => setShowTallyBridge((open) => !open)}
-          className="flex w-full items-center justify-between px-5 py-4 text-left"
-        >
-          <div>
-            <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-              Tally Prime live bridge (optional)
-            </div>
-            <div className="text-xs text-slate-500 dark:text-slate-400">
-              Connect directly to a local Tally Prime XML server on port 9000.
-            </div>
-          </div>
-          {showTallyBridge ? (
-            <ChevronDown className="h-4 w-4 text-slate-400" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-slate-400" />
-          )}
-        </button>
-
-        {showTallyBridge ? (
-          <div className="space-y-4 border-t border-slate-100 px-5 py-4 dark:border-slate-800">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <label className="block sm:col-span-2">
-                <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
-                  Tally server URL
-                </span>
-                <input
-                  value={tallyUrl}
-                  onChange={(event) => setTallyUrl(event.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                />
-              </label>
-              <div className="flex items-end gap-2">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void handleTestTally()}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>Test</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void handlePushToTally()}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  <span>Push books</span>
-                </button>
+      {/* Section 4: Collapsible Tally Prime Live Bridge (only when Tally integration is enabled) */}
+      {enableTally ? (
+        <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-[#111827]">
+          <button
+            type="button"
+            onClick={() => setShowTallyBridge((open) => !open)}
+            className="flex w-full items-center justify-between px-5 py-4 text-left"
+          >
+            <div>
+              <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+                Tally Prime live bridge (optional)
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                Connect directly to a local Tally Prime XML server on port 9000.
               </div>
             </div>
+            {showTallyBridge ? (
+              <ChevronDown className="h-4 w-4 text-slate-400" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            )}
+          </button>
 
-            {tallyStatus ? (
-              <p className="text-xs text-slate-600 dark:text-slate-300">{tallyStatus}</p>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
+          {showTallyBridge ? (
+            <div className="space-y-4 border-t border-slate-100 px-5 py-4 dark:border-slate-800">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <label className="block sm:col-span-2">
+                  <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                    Tally server URL
+                  </span>
+                  <input
+                    value={tallyUrl}
+                    onChange={(event) => setTallyUrl(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </label>
+                <div className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleTestTally()}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>Test</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handlePushToTally()}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    <span>Push books</span>
+                  </button>
+                </div>
+              </div>
+
+              {tallyStatus ? (
+                <p className="text-xs text-slate-600 dark:text-slate-300">{tallyStatus}</p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -48,6 +48,8 @@ export function OnboardingWizard({ onCompleted, onCancel }: Props) {
   const [state, setState] = useState('Karnataka');
   const [gstin, setGstin] = useState('');
   const [booksBegin, setBooksBegin] = useState(() => defaultBooksBegin());
+  const [enableTally, setEnableTally] = useState(false);
+  const [enableCaPack, setEnableCaPack] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -66,6 +68,8 @@ export function OnboardingWizard({ onCompleted, onCancel }: Props) {
         name: trimmed,
         state,
         booksBegin,
+        enableTally,
+        enableCaPack,
       };
       if (gstin.trim()) {
         input.gstin = gstin.trim().toUpperCase();
@@ -303,25 +307,25 @@ ${monthPrefix}-16,Bank Quarterly Account Charges,500.00,,264150.00`;
             0ledger
           </div>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            Clean books, ready for your CA.
+            Simple, accurate books on your device.
           </h1>
           <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-            Import bank statements, approve suggested entries in one click, reconcile GSTR-2B, and
-            export Tally-ready packs. Everything stays private inside your browser.
+            Pull transactions from email or statements, approve suggested categories in one click,
+            and keep clear financial reports. Everything stays private inside your browser.
           </p>
 
           <ul className="mt-8 space-y-3 text-sm text-slate-700 dark:text-slate-300">
             <li className="flex items-start gap-2.5">
               <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <span>Exact paise double-entry engine with automatic Tally chart of accounts</span>
+              <span>Automatic double-entry bookkeeping with ready-made account categories</span>
             </li>
             <li className="flex items-start gap-2.5">
               <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <span>Bank statement parsing, autopilot rules, and GSTR-2B ITC matching</span>
+              <span>IMAP email import, statement parsing, and bank reconciliation</span>
             </li>
             <li className="flex items-start gap-2.5">
               <Shield className="mt-0.5 h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" />
-              <span>Zero cloud lock-in with encrypted local backups and Tally XML export</span>
+              <span>Zero cloud lock-in with Excel exports and encrypted local backups</span>
             </li>
           </ul>
 
@@ -388,6 +392,9 @@ ${monthPrefix}-16,Bank Quarterly Account Charges,500.00,,264150.00`;
                   onChange={(e) => setName(e.target.value)}
                   className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
                 />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Shown on your financial reports, invoices, and exported files.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -410,6 +417,9 @@ ${monthPrefix}-16,Bank Quarterly Account Charges,500.00,,264150.00`;
                       </option>
                     ))}
                   </select>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Used to identify local vs. inter-state transactions.
+                  </p>
                 </div>
 
                 <div>
@@ -428,6 +438,10 @@ ${monthPrefix}-16,Bank Quarterly Account Charges,500.00,,264150.00`;
                     onChange={(e) => setGstin(e.target.value.toUpperCase())}
                     className="num-tabular mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 uppercase placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
                   />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Leave blank if not GST-registered. GST reports and tax fields stay hidden until
+                    added.
+                  </p>
                 </div>
               </div>
 
@@ -445,6 +459,55 @@ ${monthPrefix}-16,Bank Quarterly Account Charges,500.00,,264150.00`;
                   onChange={(e) => setBooksBegin(e.target.value)}
                   className="num-tabular mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                 />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Start date of your accounting year (typically April 1). Earlier balances go into
+                  each account&apos;s opening balance.
+                </p>
+              </div>
+
+              <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Optional workflows (off by default)
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    Keep your workspace minimal, or enable these now — you can toggle them anytime
+                    in Settings.
+                  </p>
+                </div>
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={enableTally}
+                    onChange={(e) => setEnableTally(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="text-xs">
+                    <span className="block font-medium text-slate-800 dark:text-slate-200">
+                      Enable Tally integration
+                    </span>
+                    <span className="text-slate-500 dark:text-slate-400">
+                      Adds Tally Prime XML export/import, readiness checks, and live bridge tools.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={enableCaPack}
+                    onChange={(e) => setEnableCaPack(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="text-xs">
+                    <span className="block font-medium text-slate-800 dark:text-slate-200">
+                      Enable CA Pack &amp; month-end close
+                    </span>
+                    <span className="text-slate-500 dark:text-slate-400">
+                      Adds a Chartered Accountant handover checklist, Ask CA queue, and monthly pack
+                      bundler on your overview.
+                    </span>
+                  </span>
+                </label>
               </div>
 
               <div className="pt-2">

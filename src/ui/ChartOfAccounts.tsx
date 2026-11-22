@@ -27,6 +27,8 @@ type Side = 'debit' | 'credit';
 
 interface Props {
   workspaceId: string;
+  hasGstin?: boolean | undefined;
+  enableTally?: boolean | undefined;
   onChanged?: ((message: string) => void) | undefined;
 }
 
@@ -41,7 +43,12 @@ function signedMinor(amount: string, side: Side): number {
   return side === 'debit' ? value : -value;
 }
 
-export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
+export default function ChartOfAccounts({
+  workspaceId,
+  hasGstin = false,
+  enableTally = false,
+  onChanged,
+}: Props) {
   const [bundle, setBundle] = useState<WorkspaceBundle>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -214,8 +221,12 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
       }
       const input: UpdatePartyInput = {
         legalName: partyLegalName,
-        gstin: partyGstin,
-        gstRegistrationType: partyGstRegType,
+        ...(hasGstin
+          ? {
+              gstin: partyGstin,
+              gstRegistrationType: partyGstRegType,
+            }
+          : {}),
         state: partyState,
         pincode: partyPincode,
         email: partyEmail,
@@ -337,7 +348,9 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
               New ledger account
             </h3>
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              Mapped automatically to Tally parent groups
+              {enableTally
+                ? 'Mapped automatically to Tally parent groups'
+                : 'Organizes entries into Profit & Loss and Balance Sheet'}
             </span>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -352,6 +365,9 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
                 required
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                Name of the bank, expense category, customer, or vendor.
+              </span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -368,6 +384,9 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
                   </option>
                 ))}
               </select>
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                Determines where this account appears in reports (e.g. Bank Accounts, Indirect Expenses).
+              </span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -379,33 +398,41 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
                 placeholder="1020"
                 className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                Short numbering code if you organize accounts by number.
+              </span>
             </label>
-            <div className="grid grid-cols-3 gap-2">
-              <label className="col-span-2 block">
-                <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
-                  Opening
-                </span>
-                <input
-                  inputMode="decimal"
-                  value={opening}
-                  onChange={(event) => setOpening(event.target.value)}
-                  placeholder="0.00"
-                  className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
-                  Side
-                </span>
-                <select
-                  value={side}
-                  onChange={(event) => setSide(event.target.value as Side)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                >
-                  <option value="debit">Dr</option>
-                  <option value="credit">Cr</option>
-                </select>
-              </label>
+            <div>
+              <div className="grid grid-cols-3 gap-2">
+                <label className="col-span-2 block">
+                  <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                    Opening
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    value={opening}
+                    onChange={(event) => setOpening(event.target.value)}
+                    placeholder="0.00"
+                    className="num-tabular w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                    Side
+                  </span>
+                  <select
+                    value={side}
+                    onChange={(event) => setSide(event.target.value as Side)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  >
+                    <option value="debit">Dr</option>
+                    <option value="credit">Cr</option>
+                  </select>
+                </label>
+              </div>
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                Starting balance on your Books begin date. Assets/bank are Dr; loans/payables are Cr.
+              </span>
             </div>
           </div>
           <div className="mt-4 flex items-center justify-end gap-2">
@@ -482,7 +509,7 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
                     ledger.code,
                     ledger.isBank ? 'Bank' : '',
                     ledger.isParty ? 'Party' : '',
-                    party?.gstin ? `GSTIN ${party.gstin}` : '',
+                    hasGstin && party?.gstin ? `GSTIN ${party.gstin}` : '',
                     party?.state ?? '',
                     ledger.isSystem ? 'System' : '',
                   ]
@@ -647,34 +674,38 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
                                     className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                   />
                                 </label>
-                                <label className="block">
-                                  <span className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                                    GSTIN (15 chars)
-                                  </span>
-                                  <input
-                                    value={partyGstin}
-                                    onChange={(e) => setPartyGstin(e.target.value.toUpperCase())}
-                                    placeholder="27ABCDE1234F1Z5"
-                                    maxLength={15}
-                                    className="num-tabular w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs uppercase text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                                  />
-                                </label>
-                                <label className="block">
-                                  <span className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                                    GST registration
-                                  </span>
-                                  <select
-                                    value={partyGstRegType}
-                                    onChange={(e) => setPartyGstRegType(e.target.value)}
-                                    className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                                  >
-                                    <option value="">Not specified</option>
-                                    <option value="Regular">Regular</option>
-                                    <option value="Composition">Composition</option>
-                                    <option value="Unregistered">Unregistered</option>
-                                    <option value="Consumer">Consumer</option>
-                                  </select>
-                                </label>
+                                {hasGstin ? (
+                                  <>
+                                    <label className="block">
+                                      <span className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                                        GSTIN (15 chars)
+                                      </span>
+                                      <input
+                                        value={partyGstin}
+                                        onChange={(e) => setPartyGstin(e.target.value.toUpperCase())}
+                                        placeholder="27ABCDE1234F1Z5"
+                                        maxLength={15}
+                                        className="num-tabular w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs uppercase text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      />
+                                    </label>
+                                    <label className="block">
+                                      <span className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                                        GST registration
+                                      </span>
+                                      <select
+                                        value={partyGstRegType}
+                                        onChange={(e) => setPartyGstRegType(e.target.value)}
+                                        className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      >
+                                        <option value="">Not specified</option>
+                                        <option value="Regular">Regular</option>
+                                        <option value="Composition">Composition</option>
+                                        <option value="Unregistered">Unregistered</option>
+                                        <option value="Consumer">Consumer</option>
+                                      </select>
+                                    </label>
+                                  </>
+                                ) : null}
                                 <label className="block">
                                   <span className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
                                     State
@@ -721,6 +752,9 @@ export default function ChartOfAccounts({ workspaceId, onChanged }: Props) {
                                     placeholder="30"
                                     className="num-tabular w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                   />
+                                  <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                                    Payment terms in days for overdue aging alerts.
+                                  </span>
                                 </label>
                                 <label className="block">
                                   <span className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
