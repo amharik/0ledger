@@ -1,0 +1,15 @@
+[package]
+name = "zeroledger-sync"
+description = "UI-agnostic device-to-device synchronization for 0ledger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+chacha20poly1305.workspace = true
+getrandom.workspace = true
+base64.workspace = true

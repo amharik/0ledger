@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/engine",
+  "crates/storage",
+  "crates/sync",
+  "crates/ffi",
+]
+# The Tauri shell is intentionally excluded from the portable-engine workspace so
+# `cargo test --workspace` never requires GTK/WebKit system libraries.
+exclude = ["src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+uniffi = "0.28"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

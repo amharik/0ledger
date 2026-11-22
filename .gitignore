@@ -6,7 +6,19 @@ node_modules/
 dist/
 dist-desktop/
 src-tauri/target/
+target/
+build/
 *.zip
+
+# generated mobile bindings & artifacts
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/app/src/main/jniLibs/
+mobile/android/app/src/main/java/uniffi/
+mobile/ios/Generated/
+mobile/ios/*.xcodeproj/
+mobile/ios/build/
+*.xcframework
 
 # wxt
 .wxt/

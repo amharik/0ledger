@@ -2,8 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod engine_commands;
 
 use commands::*;
+use engine_commands::*;
 use tauri::Emitter;
 
 #[tauri::command]
@@ -84,6 +86,10 @@ async fn keyring_delete_credential(service: String, account: String) -> Result<(
 
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            engine_commands::init(app)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_default_folders,
             scan_inbox_folder,
@@ -94,7 +100,21 @@ fn main() {
             imap_fetch_messages,
             keyring_store_credential,
             keyring_get_credential,
-            keyring_delete_credential
+            keyring_delete_credential,
+            engine_version,
+            store_device_id,
+            store_schema_version,
+            store_list_ledgers,
+            store_list_vouchers,
+            store_trial_balance,
+            store_profit_and_loss,
+            store_integrity_check,
+            store_post_voucher,
+            store_import_bundle,
+            store_backup,
+            sync_generate_key,
+            sync_export_envelope,
+            sync_import_envelope
         ])
         .run(tauri::generate_context!())
         .expect("error while running 0ledger desktop application");

@@ -1,0 +1,17 @@
+[package]
+name = "zeroledger-storage"
+description = "SQLite-authoritative persistence for the 0ledger engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeroledger-engine = { path = "../engine" }
+zeroledger-sync = { path = "../sync" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rusqlite.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+getrandom.workspace = true

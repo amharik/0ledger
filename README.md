@@ -1,6 +1,6 @@
 # 0ledger
 
-Local-first, double-entry bookkeeping and tax reconciliation for Indian businesses — built as a high-performance native desktop application powered by Tauri and React, with zero remote server backend.
+Local-first, double-entry bookkeeping and tax reconciliation for Indian businesses — built as a portable Rust financial engine with Tauri + React desktop and native Android/iOS shells, with zero remote server backend.
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel), OCR bills and FASTag statements, turns it into a Tally-compatible ledger, reconciles GSTR-2B Input Tax Credit (ITC), and helps you close books in under 15 minutes a month. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
@@ -8,7 +8,7 @@ Local-first, double-entry bookkeeping and tax reconciliation for Indian business
 
 ## Why
 
-- **Local-first**: your ledger lives in IndexedDB/SQLite on your machine; the app works completely offline.
+- **Local-first**: your ledger lives in a local SQLite database managed by the Rust engine; the app works completely offline.
 - **No backend**: only Google APIs you explicitly authorize (optional). Raw financial data never touches remote servers.
 - **1-Year Free Pro Trial**: new workspaces include a 365-day full Pro trial with GSTR-2B reconciliation and Tally bridge unlocked.
 - **GSTR-2B Reconciler**: match GST portal 2B data with your purchase ledger to claim all eligible ITC and generate instant WhatsApp reminders for delinquent vendors.
@@ -47,18 +47,21 @@ Email / PDF / CSV / XLSX
    adapters + parsers (staged, confidence-scored)
           │
           ▼
-  Local ledger (IndexedDB via Dexie)
-  ├─ append-only audit + double-entry vouchers
+  Authoritative ledger (Rust engine + SQLite)
+  ├─ append-only audit hash chain + double-entry vouchers
   ├─ integer minor units + explicit round-off
   ├─ Tally-complete model (GST/TDS/forex/inventory fields captured)
-  └─ encrypted backups (AES-GCM)
+  ├─ sealed device-to-device sync envelopes (ChaCha20-Poly1305)
+  └─ local backups via SQLite VACUUM INTO
           │
           ├──► Google Sheets live mirror (one workbook per workspace)
           └──► monthly .xlsx archive + Tally/Beancount/CSV/OFX exports
 ```
 
-- **UI & Runtime**: React + TypeScript, Vite, Tauri v2 (Desktop native for Linux, Windows, macOS).
-- **Storage**: Dexie / IndexedDB with OPFS attachments.
+- **Engine**: portable Rust crates (`crates/engine`, `crates/storage`, `crates/sync`) with no UI or network coupling.
+- **UI & Runtime**: React + TypeScript, Vite, Tauri v2 desktop; Kotlin/Compose and SwiftUI mobile shells.
+- **Storage**: SQLite via `zeroledger-storage` (WAL, migrations, audit chain, change log). Dexie/IndexedDB remains a read-through compatibility mirror while the desktop UI finishes its cutover.
+- **Sync**: UI-agnostic, transport-agnostic change envelopes with last-writer-wins conflict resolution.
 - **Parsing**: pdf.js, PapaParse, ExcelJS, postal-mime, client-side OCR.
 - **No remote code**, zero-backend architecture.
 
@@ -68,11 +71,15 @@ Email / PDF / CSV / XLSX
 npm install
 npm run dev            # run desktop app in development server mode (http://localhost:1420)
 npm run build          # production frontend build into dist-desktop/
-npm test               # core unit tests (136 tests)
+npm test               # core unit tests
 npm run compile        # strict type-check
 npm run tauri:dev      # run native desktop window with hot reload
 npm run tauri:build    # build release desktop binaries (.deb, .AppImage, .exe, .dmg)
 npm run tauri:build:debug # build debug desktop binary for local testing
+
+cargo test --workspace # Rust engine, storage and sync tests
+cargo clippy --workspace --all-targets -- -D warnings
+./mobile/generate-bindings.sh  # regenerate Kotlin + Swift UniFFI bindings
 ```
 
 ### Desktop Target (Primary)
@@ -84,6 +91,14 @@ The application is bundled into native desktop binaries via Tauri. It has direct
 ## Repository layout
 
 ```
+crates/
+  engine/           pure double-entry rules, money, validation, reports
+  storage/          authoritative SQLite schema, migrations, audit chain, change log
+  sync/             sealed change envelopes, LWW merge, transports
+  ffi/              UniFFI surface for Kotlin and Swift
+mobile/
+  android/          Kotlin + Jetpack Compose shell
+  ios/              SwiftUI shell
 src/
   entrypoints/      background, popup, sidepanel, options
   core/

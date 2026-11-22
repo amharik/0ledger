@@ -16,6 +16,7 @@ import { ReconciliationPanel } from '@/ui/ReconciliationPanel';
 import ChartOfAccounts from '@/ui/ChartOfAccounts';
 import InterchangePanel from '@/ui/InterchangePanel';
 import DrivePanel from '@/ui/DrivePanel';
+import { EnginePanel } from '@/ui/EnginePanel';
 import { ErrorBoundary } from '@/ui/ErrorBoundary';
 import { listParties, listStockItems, type PartyView } from '@/core/db/master-service';
 import type { StockItem } from '@/core/model';
@@ -33,7 +34,8 @@ type Tab =
   | 'recon'
   | 'reports'
   | 'accounts'
-  | 'settings';
+  | 'settings'
+  | 'engine';
 
 export default function App() {
   const { bundle, workspaces, loading, error, reload, selectWorkspace } = useWorkspace();
@@ -204,6 +206,13 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={activeTab === 'engine' ? 'chip active' : 'chip'}
+            onClick={() => setActiveTab('engine')}
+          >
+            Engine & Sync
+          </button>
+          <button
+            type="button"
             className={activeTab === 'settings' ? 'chip active' : 'chip'}
             onClick={() => setActiveTab('settings')}
           >
@@ -339,6 +348,10 @@ export default function App() {
 
             {activeTab === 'accounts' ? (
               <ChartOfAccounts workspaceId={bundle.workspace.id} />
+            ) : null}
+
+            {activeTab === 'engine' ? (
+              <EnginePanel workspaceId={bundle.workspace.id} />
             ) : null}
 
             {activeTab === 'settings' ? (

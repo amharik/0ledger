@@ -8,6 +8,9 @@ edition = "2021"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
+zeroledger-engine = { path = "../crates/engine" }
+zeroledger-storage = { path = "../crates/storage" }
+zeroledger-sync = { path = "../crates/sync" }
 tauri = { version = "2.0", features = [] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
