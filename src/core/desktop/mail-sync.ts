@@ -7,6 +7,8 @@ import { captureStatementLines } from '@/core/autopilot';
 import type { ImportSource } from '@/core/model';
 import { AttachmentSchema, type Attachment } from '@/core/model';
 import { newId, nowIso } from '@/core/ids';
+import { sha256Hex } from '@/core/util/hash';
+import { storeRawArtifact, processFinancialObservation } from '@/core/canonical/engine';
 import { getDefaultFolders } from './folder-watcher';
 
 export interface ImapConfig {
@@ -68,6 +70,10 @@ export interface SyncedTransactionItem {
   transactionId?: string | undefined;
   attachmentId?: string | undefined;
   attachmentPath?: string | undefined;
+  canonicalTxnId?: string | undefined;
+  observationId?: string | undefined;
+  idBasis?: string | undefined;
+  isTransfer?: boolean | undefined;
   status: 'captured' | 'duplicate' | 'skipped';
 }
 
@@ -141,7 +147,51 @@ export function clearMailSyncStorage(workspaceId?: string): void {
   }
 }
 
-// Safe password obfuscation/encryption using workspace-derived XOR cipher
+// Native Keyring integration for desktop OS (Keychain / Secret Service / DPAPI)
+export async function storeNativePassword(accountKey: string, secret: string): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('keyring_store_credential', {
+        service: '0ledger.mail',
+        account: accountKey,
+        secret,
+      });
+      return true;
+    } catch {
+      // Fallback gracefully if native keyring is unavailable
+    }
+  }
+  return false;
+}
+
+export async function getNativePassword(accountKey: string): Promise<string | undefined> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const pass = await invoke<string>('keyring_get_credential', {
+        service: '0ledger.mail',
+        account: accountKey,
+      });
+      if (pass) return pass;
+    } catch {}
+  }
+  return undefined;
+}
+
+export async function deleteNativePassword(accountKey: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('keyring_delete_credential', {
+        service: '0ledger.mail',
+        account: accountKey,
+      });
+    } catch {}
+  }
+}
+
+// Safe password obfuscation/encryption fallback using workspace-derived XOR cipher
 export function encodePassword(password: string, salt = '0ledger-key'): string {
   if (!password) return '';
   try {
@@ -212,7 +262,7 @@ export function listMailboxes(workspaceId: string): MailboxAccount[] {
   return [];
 }
 
-export function saveMailbox(workspaceId: string, account: MailboxAccount): void {
+export function saveMailbox(workspaceId: string, account: MailboxAccount, rawPassword?: string): void {
   let list: MailboxAccount[] = [];
   try {
     const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
@@ -232,6 +282,11 @@ export function saveMailbox(workspaceId: string, account: MailboxAccount): void 
 
   // Purge any residual legacy plaintext storage to prevent credential leaks
   removeStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+
+  // Store in native OS keyring if provided
+  if (rawPassword) {
+    storeNativePassword(`${workspaceId}:${account.id}`, rawPassword).catch(() => {});
+  }
 }
 
 export function deleteMailbox(workspaceId: string, id: string): void {
@@ -245,6 +300,7 @@ export function deleteMailbox(workspaceId: string, id: string): void {
     list[0]!.isDefault = true;
   }
   setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  deleteNativePassword(`${workspaceId}:${id}`).catch(() => {});
 }
 
 export function getActiveMailbox(workspaceId: string, id?: string): MailboxAccount | undefined {
@@ -469,6 +525,19 @@ export async function syncLocalMail(
             );
             if (attached) report.attachmentsCreated += 1;
 
+            const rawHash = await sha256Hex(rawBytes);
+            const artifact = await storeRawArtifact(db, workspaceId, {
+              source: 'email',
+              messageId: parsed.email.messageId,
+              fileName: `${msg.subject.slice(0, 100) || 'email'}.eml`,
+              mimeType: 'message/rfc822',
+              sha256: rawHash,
+              sizeBytes: rawBytes.length,
+              storagePath: attached?.filePath,
+              authStatus: parsed.email.auth,
+              receivedAt: parsed.email.date ? new Date(parsed.email.date).toISOString() : undefined,
+            });
+
             for (const statement of parsed.statements) {
               const source: ImportSource = statement.kind === 'fastag' ? 'fastag' : 'email';
               const staged = await stageImport(db, {
@@ -489,16 +558,35 @@ export async function syncLocalMail(
 
               for (const row of statement.rows) {
                 const isOut = row.debitMinor > row.creditMinor;
+                const netMinor = Math.abs(row.creditMinor - row.debitMinor);
+
+                const obsRes = await processFinancialObservation(db, workspaceId, artifact.id, {
+                  date: row.date,
+                  amountMinor: netMinor,
+                  direction: isOut ? 'out' : 'in',
+                  currency: row.currency,
+                  merchantRaw: row.description,
+                  referenceId: row.reference,
+                  rail: (row.raw?.rail as string | undefined) ?? (row.reference ? 'generic' : undefined),
+                  accountTail: typeof row.raw?.accountTail === 'string' ? row.raw.accountTail : undefined,
+                  issuer: typeof row.raw?.institution === 'string' ? row.raw.institution : undefined,
+                  rawSnippet: row.description,
+                });
+
                 report.items.push({
                   uid: msg.uid,
                   subject: msg.subject,
                   sender: msg.from,
                   date: row.date,
-                  amountMinor: Math.abs(row.creditMinor - row.debitMinor),
+                  amountMinor: netMinor,
                   direction: isOut ? 'out' : 'in',
                   transactionId: row.reference,
                   attachmentId: attached?.attachmentId,
                   attachmentPath: attached?.filePath,
+                  canonicalTxnId: obsRes.canonicalTxn.id,
+                  observationId: obsRes.observation.id,
+                  idBasis: obsRes.canonicalTxn.idBasis,
+                  isTransfer: obsRes.canonicalTxn.isTransfer,
                   status: 'captured',
                 });
               }
@@ -520,6 +608,16 @@ export async function syncLocalMail(
             );
             if (attached) report.attachmentsCreated += 1;
 
+            const rawHash = await sha256Hex(rawBytes);
+            const artifact = await storeRawArtifact(db, workspaceId, {
+              source: 'email',
+              fileName: `${msg.subject.slice(0, 100) || 'alert'}.eml`,
+              mimeType: 'message/rfc822',
+              sha256: rawHash,
+              sizeBytes: rawBytes.length,
+              storagePath: attached?.filePath,
+            });
+
             const staged = await stageImport(db, {
               workspaceId,
               source: alertStmt.kind === 'fastag' ? 'fastag' : 'email',
@@ -538,16 +636,35 @@ export async function syncLocalMail(
 
             for (const row of alertStmt.rows) {
               const isOut = row.debitMinor > row.creditMinor;
+              const netMinor = Math.abs(row.creditMinor - row.debitMinor);
+
+              const obsRes = await processFinancialObservation(db, workspaceId, artifact.id, {
+                date: row.date,
+                amountMinor: netMinor,
+                direction: isOut ? 'out' : 'in',
+                currency: row.currency,
+                merchantRaw: row.description,
+                referenceId: row.reference,
+                rail: (row.raw?.rail as string | undefined) ?? (row.reference ? 'generic' : undefined),
+                accountTail: typeof row.raw?.accountTail === 'string' ? row.raw.accountTail : undefined,
+                issuer: typeof row.raw?.institution === 'string' ? row.raw.institution : undefined,
+                rawSnippet: row.description,
+              });
+
               report.items.push({
                 uid: msg.uid,
                 subject: msg.subject,
                 sender: msg.from,
                 date: row.date,
-                amountMinor: Math.abs(row.creditMinor - row.debitMinor),
+                amountMinor: netMinor,
                 direction: isOut ? 'out' : 'in',
                 transactionId: row.reference,
                 attachmentId: attached?.attachmentId,
                 attachmentPath: attached?.filePath,
+                canonicalTxnId: obsRes.canonicalTxn.id,
+                observationId: obsRes.observation.id,
+                idBasis: obsRes.canonicalTxn.idBasis,
+                isTransfer: obsRes.canonicalTxn.isTransfer,
                 status: 'captured',
               });
             }

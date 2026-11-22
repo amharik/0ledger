@@ -142,3 +142,45 @@ export type CloseItemOwner = (typeof CLOSE_ITEM_OWNERS)[number];
 
 export const READINESS_STATUSES = ['ready', 'needs_review', 'not_ready'] as const;
 export type ReadinessStatus = (typeof READINESS_STATUSES)[number];
+
+export const ARTIFACT_SOURCES = ['email', 'statement', 'invoice', 'receipt', 'webmail', 'upload'] as const;
+export type ArtifactSource = (typeof ARTIFACT_SOURCES)[number];
+
+export const OBSERVATION_CHANNELS = [
+  'upi',
+  'upi_cc',
+  'upi_lite',
+  'pos',
+  'ecom',
+  'contactless',
+  'atm',
+  'neft',
+  'imps',
+  'rtgs',
+  'nach',
+  'bbps',
+  'generic',
+] as const;
+export type ObservationChannel = (typeof OBSERVATION_CHANNELS)[number];
+
+export const INSTRUMENT_TYPES = [
+  'savings',
+  'current',
+  'card',
+  'wallet',
+  'upi_lite',
+  'loan',
+  'nps',
+  'ppf',
+  'unknown',
+] as const;
+export type InstrumentType = (typeof INSTRUMENT_TYPES)[number];
+
+export const CANONICAL_TXN_STATUSES = ['pending', 'posted', 'reversed', 'refunded'] as const;
+export type CanonicalTxnStatus = (typeof CANONICAL_TXN_STATUSES)[number];
+
+export const ID_BASES = ['upi', 'utr', 'arn', 'card', 'order', 'fingerprint'] as const;
+export type IdBasis = (typeof ID_BASES)[number];
+
+export const OWN_ACCOUNT_TYPES = ['savings', 'current', 'card', 'wallet', 'nps', 'ppf'] as const;
+export type OwnAccountType = (typeof OWN_ACCOUNT_TYPES)[number];

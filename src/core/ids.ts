@@ -27,7 +27,11 @@ export type IdPrefix =
   | 'cli'
   | 'cap'
   | 'g2b'
-  | 'rcn';
+  | 'rcn'
+  | 'art'
+  | 'obs'
+  | 'ctx'
+  | 'oac';
 
 const ID_PATTERN = /^[a-z]{2,6}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

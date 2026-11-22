@@ -1,19 +1,25 @@
 import { z } from 'zod';
 import {
+  ARTIFACT_SOURCES,
   BILL_TYPES,
+  CANONICAL_TXN_STATUSES,
   CLASSIFICATION_MATCH_TYPES,
   CLASSIFICATION_RULE_SOURCES,
   CLOSE_ITEM_OWNERS,
   CLOSE_ITEM_STATUSES,
   CLOSE_ITEM_TYPES,
+  ID_BASES,
   IMPORT_SOURCES,
   IMPORT_STATUSES,
+  INSTRUMENT_TYPES,
   LEDGER_NATURES,
   MATCH_STATUSES,
   MONEY_EVENT_DIRECTIONS,
   MONEY_EVENT_SOURCES,
   MONEY_EVENT_STATUSES,
   NUMBERING_RESET_PERIODS,
+  OBSERVATION_CHANNELS,
+  OWN_ACCOUNT_TYPES,
   PARTY_TYPES,
   RECONCILIATION_METHODS,
   READINESS_STATUSES,
@@ -742,4 +748,104 @@ export type CloseItem = z.infer<typeof CloseItemSchema>;
 export type CaPackFile = z.infer<typeof CaPackFileSchema>;
 export type CaPackManifest = z.infer<typeof CaPackManifestSchema>;
 export type CaPackQuestion = z.infer<typeof CaPackQuestionSchema>;
+export const RawArtifactSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    source: z.enum(ARTIFACT_SOURCES),
+    messageId: z.string().max(512).optional(),
+    fileName: z.string().max(512).optional(),
+    mimeType: z.string().max(128),
+    sha256: sha256HexString,
+    sizeBytes: z.number().int().nonnegative(),
+    storagePath: z.string().max(1024).optional(),
+    authStatus: z
+      .object({
+        dmarc: z.string().optional(),
+        spf: z.string().optional(),
+        dkim: z.string().optional(),
+        isAuthentic: z.boolean(),
+        raw: z.string().optional(),
+      })
+      .optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    receivedAt: isoTimestamp.optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const FinancialObservationSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    artifactId: entityId,
+    canonicalTxnId: entityId.optional(),
+    instrumentType: z.enum(INSTRUMENT_TYPES).default('unknown'),
+    issuer: z.string().max(128).optional(),
+    accountTail: z.string().max(32).optional(),
+    channel: z.enum(OBSERVATION_CHANNELS).default('generic'),
+    date: isoDate,
+    amountMinor: minorAmount,
+    direction: z.enum(MONEY_EVENT_DIRECTIONS),
+    currency: currencyCode.default('INR'),
+    merchantRaw: z.string().max(512).optional(),
+    merchantNormalized: z.string().max(256).optional(),
+    counterpartyVpa: z.string().max(256).optional(),
+    counterpartyName: z.string().max(256).optional(),
+    referenceId: z.string().max(256).optional(),
+    rail: z.string().max(64).optional(),
+    confidence: z.number().min(0).max(1).default(0.8),
+    rawSnippet: z.string().max(2048).optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const CanonicalTxnSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    txnUid: z.string().min(1).max(64),
+    idBasis: z.enum(ID_BASES),
+    parentUid: z.string().max(64).optional(),
+    linkGroupId: z.string().max(64).optional(),
+    date: isoDate,
+    amountMinor: minorAmount,
+    direction: z.enum(MONEY_EVENT_DIRECTIONS),
+    currency: currencyCode.default('INR'),
+    instrumentType: z.string().max(64).default('unknown'),
+    issuer: z.string().max(128).optional(),
+    accountTail: z.string().max(32).optional(),
+    channel: z.string().max(64).default('generic'),
+    counterparty: z.string().max(256).optional(),
+    counterpartyVpa: z.string().max(256).optional(),
+    reference: z.string().max(256).optional(),
+    status: z.enum(CANONICAL_TXN_STATUSES).default('posted'),
+    isTransfer: z.boolean().default(false),
+    category: z.string().max(128).optional(),
+    confidence: z.number().min(0).max(1).default(1),
+    observationIds: z.array(z.string()).default([]),
+    postedVoucherId: entityId.optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const OwnAccountSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    type: z.enum(OWN_ACCOUNT_TYPES),
+    institution: shortText,
+    accountTail: z.string().min(2).max(16),
+    maskedNumber: z.string().max(64).optional(),
+    vpas: z.array(z.string().max(128)).default([]),
+    ledgerId: entityId.optional(),
+    isPrimary: z.boolean().default(false),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
 export type CaPack = z.infer<typeof CaPackSchema>;
+export type RawArtifact = z.infer<typeof RawArtifactSchema>;
+export type FinancialObservation = z.infer<typeof FinancialObservationSchema>;
+export type CanonicalTxn = z.infer<typeof CanonicalTxnSchema>;
+export type OwnAccount = z.infer<typeof OwnAccountSchema>;

@@ -180,7 +180,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
       isDefault: mailboxes.length === 0 || (!isEditNew && activeAccount?.id === editTargetId),
       createdAt: new Date().toISOString(),
     };
-    saveMailbox(workspaceId, updated);
+    saveMailbox(workspaceId, updated, editPassword.trim());
     const refreshed = listMailboxes(workspaceId);
     setMailboxes(refreshed);
     setSelectedMailboxId(updated.id);

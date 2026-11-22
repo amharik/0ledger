@@ -19,7 +19,9 @@ import type {
   LedgerGroup,
   MoneyEvent,
   NumberingScheme,
+  OwnAccount,
   Party,
+  RawArtifact,
   Reconciliation,
   StatementLine,
   StockItem,
@@ -27,10 +29,12 @@ import type {
   Voucher,
   VoucherLine,
   Workspace,
+  CanonicalTxn,
+  FinancialObservation,
 } from '../model';
 
 export const DB_NAME = '0ledger';
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 export interface KeyValue {
   key: string;
@@ -67,6 +71,10 @@ export class LedgerDatabase extends Dexie {
   driveLinks!: Table<DriveLink, string>;
   syncState!: Table<KeyValue, string>;
   settings!: Table<KeyValue, string>;
+  rawArtifacts!: Table<RawArtifact, string>;
+  observations!: Table<FinancialObservation, string>;
+  canonicalTxns!: Table<CanonicalTxn, string>;
+  ownAccounts!: Table<OwnAccount, string>;
 
   constructor(name = DB_NAME) {
     super(name);
@@ -110,6 +118,17 @@ export class LedgerDatabase extends Dexie {
       closeItems:
         'id, workspaceId, [workspaceId+period], [workspaceId+status], [workspaceId+type], dedupeKey, sourceEntityId',
       caPacks: 'id, workspaceId, [workspaceId+period], generatedAt',
+    });
+
+    this.version(4).stores({
+      moneyEvents:
+        'id, workspaceId, sourceRef, [workspaceId+date], [workspaceId+status], contentHash, statementLineId, importBatchId, postedVoucherId',
+      rawArtifacts: 'id, workspaceId, sha256, [workspaceId+source], messageId',
+      observations:
+        'id, workspaceId, artifactId, canonicalTxnId, [workspaceId+date], referenceId, rail',
+      canonicalTxns:
+        'id, workspaceId, txnUid, reference, [workspaceId+date], [workspaceId+status], linkGroupId, postedVoucherId',
+      ownAccounts: 'id, workspaceId, [workspaceId+institution], [workspaceId+accountTail]',
     });
   }
 }

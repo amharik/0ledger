@@ -55,6 +55,33 @@ async fn imap_fetch_messages(
     .map_err(|e| format!("Mail fetch task error: {}", e))?
 }
 
+#[tauri::command]
+async fn keyring_store_credential(service: String, account: String, secret: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keyring_store_credential_impl(&service, &account, &secret)
+    })
+    .await
+    .map_err(|e| format!("Keyring store task error: {}", e))?
+}
+
+#[tauri::command]
+async fn keyring_get_credential(service: String, account: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keyring_get_credential_impl(&service, &account)
+    })
+    .await
+    .map_err(|e| format!("Keyring get task error: {}", e))?
+}
+
+#[tauri::command]
+async fn keyring_delete_credential(service: String, account: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keyring_delete_credential_impl(&service, &account)
+    })
+    .await
+    .map_err(|e| format!("Keyring delete task error: {}", e))?
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -64,7 +91,10 @@ fn main() {
             organize_accounting_file,
             save_email_eml,
             imap_test_connection,
-            imap_fetch_messages
+            imap_fetch_messages,
+            keyring_store_credential,
+            keyring_get_credential,
+            keyring_delete_credential
         ])
         .run(tauri::generate_context!())
         .expect("error while running 0ledger desktop application");

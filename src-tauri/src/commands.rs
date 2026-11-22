@@ -591,6 +591,22 @@ pub fn imap_fetch_messages_impl(
     Ok(results)
 }
 
+pub fn keyring_store_credential_impl(service: &str, account: &str, secret: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(service, account).map_err(|e| format!("Keyring error: {}", e))?;
+    entry.set_password(secret).map_err(|e| format!("Keyring set error: {}", e))
+}
+
+pub fn keyring_get_credential_impl(service: &str, account: &str) -> Result<String, String> {
+    let entry = keyring::Entry::new(service, account).map_err(|e| format!("Keyring error: {}", e))?;
+    entry.get_password().map_err(|e| format!("Keyring get error: {}", e))
+}
+
+pub fn keyring_delete_credential_impl(service: &str, account: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(service, account).map_err(|e| format!("Keyring error: {}", e))?;
+    let _ = entry.delete_credential();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
