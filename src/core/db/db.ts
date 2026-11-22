@@ -4,6 +4,10 @@ import type {
   AuditEvent,
   Batch,
   BillAllocation,
+  CaPack,
+  ClassificationRule,
+  ClassificationSuggestion,
+  CloseItem,
   CompanyProfile,
   CostCenter,
   CostCenterAllocation,
@@ -13,6 +17,7 @@ import type {
   ItemLine,
   Ledger,
   LedgerGroup,
+  MoneyEvent,
   NumberingScheme,
   Party,
   Reconciliation,
@@ -25,7 +30,7 @@ import type {
 } from '../model';
 
 export const DB_NAME = '0ledger';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 export interface KeyValue {
   key: string;
@@ -53,6 +58,11 @@ export class LedgerDatabase extends Dexie {
   importBatches!: Table<ImportBatch, string>;
   statementLines!: Table<StatementLine, string>;
   reconciliations!: Table<Reconciliation, string>;
+  moneyEvents!: Table<MoneyEvent, string>;
+  classificationRules!: Table<ClassificationRule, string>;
+  classificationSuggestions!: Table<ClassificationSuggestion, string>;
+  closeItems!: Table<CloseItem, string>;
+  caPacks!: Table<CaPack, string>;
   auditEvents!: Table<AuditEvent, string>;
   driveLinks!: Table<DriveLink, string>;
   syncState!: Table<KeyValue, string>;
@@ -60,7 +70,7 @@ export class LedgerDatabase extends Dexie {
 
   constructor(name = DB_NAME) {
     super(name);
-    this.version(DB_VERSION).stores({
+    this.version(2).stores({
       workspaces: 'id, slug, companyId, archived',
       companies: 'id, workspaceId',
       ledgerGroups: 'id, workspaceId, [workspaceId+name]',
@@ -83,15 +93,23 @@ export class LedgerDatabase extends Dexie {
       attachments: 'id, workspaceId, voucherId',
       importBatches: 'id, workspaceId, status',
       statementLines: 'id, workspaceId, importBatchId, [workspaceId+matchStatus]',
+      reconciliations:
+        'id, workspaceId, statementLineId, voucherId, [workspaceId+status], [statementLineId+status]',
       auditEvents: 'id, workspaceId, entityType, [workspaceId+entityId], at',
       driveLinks: 'id, workspaceId, fileId',
       syncState: 'key',
       settings: 'key',
     });
 
-    this.version(2).stores({
-      reconciliations:
-        'id, workspaceId, statementLineId, voucherId, [workspaceId+status], [statementLineId+status]',
+    this.version(3).stores({
+      moneyEvents:
+        'id, workspaceId, [workspaceId+date], [workspaceId+status], contentHash, statementLineId, importBatchId, postedVoucherId',
+      classificationRules:
+        'id, workspaceId, [workspaceId+enabled], [workspaceId+priority], matchType',
+      classificationSuggestions: 'id, workspaceId, moneyEventId, ruleId',
+      closeItems:
+        'id, workspaceId, [workspaceId+period], [workspaceId+status], [workspaceId+type], dedupeKey, sourceEntityId',
+      caPacks: 'id, workspaceId, [workspaceId+period], generatedAt',
     });
   }
 }

@@ -1,4 +1,4 @@
-import type { LedgerNature, TallyPrimaryGroup } from '../model';
+import type { ClassificationMatchType, LedgerNature, TallyPrimaryGroup } from '../model';
 
 export const TALLY_GROUP_NATURE: Record<TallyPrimaryGroup, LedgerNature> = {
   'Capital Account': 'equity',
@@ -49,6 +49,17 @@ export const DEFAULT_LEDGERS: DefaultLedgerSpec[] = [
   { name: 'Discount Given', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5100' },
   { name: 'Discount Received', tallyParent: 'Indirect Income', nature: 'income', code: '4100' },
   { name: 'Round Off', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5900' },
+  { name: 'Bank Charges', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5910' },
+  { name: 'Interest Paid', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5920' },
+  { name: 'Salary', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5930' },
+  { name: 'Rent', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5940' },
+  { name: 'Local Conveyance', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5950' },
+  { name: 'Meals & Entertainment', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5960' },
+  { name: 'Software Subscriptions', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5970' },
+  { name: 'Office Expenses', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5980' },
+  { name: 'Utilities', tallyParent: 'Indirect Expenses', nature: 'expense', code: '5990' },
+  { name: 'Interest Received', tallyParent: 'Indirect Income', nature: 'income', code: '4110' },
+  { name: 'TDS Payable', tallyParent: 'Duties & Taxes', nature: 'liability', isTax: true, code: '2320' },
   { name: 'Suspense', tallyParent: 'Suspense Account', nature: 'asset', isSystem: true, code: '1999' },
   {
     name: 'Opening Balance Equity',
@@ -133,3 +144,36 @@ export function defaultBooksBegin(fyStartMonth = 4, today = new Date()): string 
   const monthText = String(fyStartMonth).padStart(2, '0');
   return `${startYear}-${monthText}-01`;
 }
+
+export interface DefaultClassificationRuleSpec {
+  name: string;
+  matchType: ClassificationMatchType;
+  pattern: string;
+  ledgerName: string;
+  taxHint?: string;
+  confidence: number;
+}
+
+export const DEFAULT_CLASSIFICATION_RULES: DefaultClassificationRuleSpec[] = [
+  { name: 'Bank charges', matchType: 'narration-keyword', pattern: 'bank charge', ledgerName: 'Bank Charges', confidence: 0.94 },
+  { name: 'SMS charges', matchType: 'narration-keyword', pattern: 'sms charge', ledgerName: 'Bank Charges', confidence: 0.92 },
+  { name: 'Annual card fee', matchType: 'narration-keyword', pattern: 'annual fee', ledgerName: 'Bank Charges', confidence: 0.9 },
+  { name: 'Debit interest', matchType: 'narration-keyword', pattern: 'interest charged', ledgerName: 'Interest Paid', confidence: 0.92 },
+  { name: 'Debit interest short', matchType: 'narration-keyword', pattern: 'int debit', ledgerName: 'Interest Paid', confidence: 0.88 },
+  { name: 'Interest received', matchType: 'narration-keyword', pattern: 'interest received', ledgerName: 'Interest Received', confidence: 0.92 },
+  { name: 'Credit interest short', matchType: 'narration-keyword', pattern: 'int credit', ledgerName: 'Interest Received', confidence: 0.88 },
+  { name: 'Salary', matchType: 'narration-keyword', pattern: 'salary', ledgerName: 'Salary', confidence: 0.9 },
+  { name: 'Rent', matchType: 'narration-keyword', pattern: 'rent', ledgerName: 'Rent', confidence: 0.9 },
+  { name: 'GST payment', matchType: 'tax-hint', pattern: 'gst', ledgerName: 'GST Input CGST', taxHint: 'GST', confidence: 0.72 },
+  { name: 'TDS payment', matchType: 'tax-hint', pattern: 'tds', ledgerName: 'TDS Payable', taxHint: 'TDS', confidence: 0.8 },
+  { name: 'Travel - Uber', matchType: 'narration-keyword', pattern: 'uber', ledgerName: 'Local Conveyance', confidence: 0.9 },
+  { name: 'Travel - Ola', matchType: 'narration-keyword', pattern: 'ola', ledgerName: 'Local Conveyance', confidence: 0.9 },
+  { name: 'Travel - IRCTC', matchType: 'narration-keyword', pattern: 'irctc', ledgerName: 'Local Conveyance', confidence: 0.9 },
+  { name: 'Meals - Swiggy', matchType: 'narration-keyword', pattern: 'swiggy', ledgerName: 'Meals & Entertainment', confidence: 0.9 },
+  { name: 'Meals - Zomato', matchType: 'narration-keyword', pattern: 'zomato', ledgerName: 'Meals & Entertainment', confidence: 0.9 },
+  { name: 'Software - AWS', matchType: 'narration-keyword', pattern: 'aws', ledgerName: 'Software Subscriptions', confidence: 0.9 },
+  { name: 'Software - Google', matchType: 'narration-keyword', pattern: 'google', ledgerName: 'Software Subscriptions', confidence: 0.86 },
+  { name: 'Software - Microsoft', matchType: 'narration-keyword', pattern: 'microsoft', ledgerName: 'Software Subscriptions', confidence: 0.88 },
+  { name: 'Utilities - electricity', matchType: 'narration-keyword', pattern: 'electricity', ledgerName: 'Utilities', confidence: 0.9 },
+  { name: 'Office supplies', matchType: 'narration-keyword', pattern: 'office', ledgerName: 'Office Expenses', confidence: 0.84 },
+];

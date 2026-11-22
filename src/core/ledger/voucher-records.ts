@@ -197,6 +197,7 @@ export function buildVoucherRecord(input: NewVoucher, meta: VoucherRecordMeta): 
       roundOffLedgerId: input.roundOffLedgerId,
       source: input.source,
       sourceRef: input.sourceRef,
+      reversesVoucherId: input.reversesVoucherId,
       groupIds: input.groupIds,
       accountingId: input.accountingId,
       tags: input.tags,

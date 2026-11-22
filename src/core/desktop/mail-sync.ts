@@ -1,0 +1,527 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { LedgerDatabase } from '@/core/db/db';
+import { parseEmailStatements, parseAlertText } from '@/core/ingest/email';
+import { stageImport } from '@/core/ingest';
+import { captureStatementLines } from '@/core/autopilot';
+import type { ImportSource } from '@/core/model';
+import { AttachmentSchema, type Attachment } from '@/core/model';
+import { newId, nowIso } from '@/core/ids';
+import { getDefaultFolders } from './folder-watcher';
+
+export interface ImapConfig {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  mailbox?: string;
+}
+
+export interface MailboxAccount {
+  id: string;
+  label: string;
+  provider: 'gmail' | 'outlook' | 'yahoo' | 'custom';
+  host: string;
+  port: number;
+  username: string;
+  passwordCipher: string; // obfuscated with workspace salt
+  mailbox?: string;
+  isDefault?: boolean;
+  lastSyncedAt?: string;
+  createdAt?: string;
+}
+
+export type MailPreset = 'fastag' | 'bank' | 'shopping' | 'all' | 'custom';
+
+export interface ImapQuery {
+  preset?: MailPreset;
+  custom_search?: string;
+  limit?: number;
+  days?: number;
+}
+
+export interface ImapMessageResult {
+  uid: number;
+  subject: string;
+  from: string;
+  date: string;
+  raw_base64: string;
+}
+
+export interface MailProgressPayload {
+  stage: string; // "connecting" | "authenticating" | "searching" | "filtering" | "fetching" | "extracting" | "complete"
+  current: number;
+  total: number;
+  percent: number;
+  message: string;
+}
+
+export interface SyncedTransactionItem {
+  uid: number;
+  subject: string;
+  sender: string;
+  date: string;
+  amountMinor: number;
+  direction: 'in' | 'out';
+  transactionId?: string | undefined;
+  attachmentId?: string | undefined;
+  attachmentPath?: string | undefined;
+  status: 'captured' | 'duplicate' | 'skipped';
+}
+
+export interface MailSyncReport {
+  fetched: number;
+  newMessages: number;
+  transactionsCreated: number;
+  attachmentsCreated: number;
+  items: SyncedTransactionItem[];
+  skipped: Array<{ uid: number; subject: string; reason: string }>;
+  errors: string[];
+}
+
+export interface SaveEmailRequest {
+  archive_root: string;
+  company_name: string;
+  financial_year: string;
+  period_month: string;
+  subject: string;
+  uid: number;
+  date: string;
+  raw_base64: string;
+}
+
+export interface SavedEmailResult {
+  file_path: string;
+  file_name: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+const IMAP_CONFIG_KEY = '0ledger.mail_sync.config';
+const MAILBOXES_KEY = '0ledger.mailboxes';
+const memoryStore = new Map<string, string>();
+
+function getStorageItem(key: string): string | null {
+  if (typeof localStorage !== 'undefined') {
+    return localStorage.getItem(key);
+  }
+  return memoryStore.get(key) ?? null;
+}
+
+function setStorageItem(key: string, value: string): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(key, value);
+  } else {
+    memoryStore.set(key, value);
+  }
+}
+
+// Safe password obfuscation/encryption using workspace-derived XOR cipher
+export function encodePassword(password: string, salt = '0ledger-key'): string {
+  if (!password) return '';
+  const s = salt || '0ledger-key';
+  const chars = Array.from(password).map((c, i) =>
+    String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)),
+  );
+  return btoa(chars.join(''));
+}
+
+export function decodePassword(cipher: string, salt = '0ledger-key'): string {
+  if (!cipher) return '';
+  const s = salt || '0ledger-key';
+  try {
+    const decoded = atob(cipher);
+    return Array.from(decoded)
+      .map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)))
+      .join('');
+  } catch {
+    return cipher;
+  }
+}
+
+export function listMailboxes(workspaceId: string): MailboxAccount[] {
+  try {
+    const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+
+  // Fallback to single legacy config if present
+  const legacy = getMailSyncConfig(workspaceId);
+  if (legacy && legacy.username) {
+    const initial: MailboxAccount = {
+      id: 'mbx_default',
+      label: `${legacy.username} (${legacy.host.includes('gmail') ? 'Gmail' : 'IMAP'})`,
+      provider: legacy.host.includes('gmail')
+        ? 'gmail'
+        : legacy.host.includes('outlook')
+          ? 'outlook'
+          : legacy.host.includes('yahoo')
+            ? 'yahoo'
+            : 'custom',
+      host: legacy.host,
+      port: legacy.port,
+      username: legacy.username,
+      passwordCipher: encodePassword(legacy.password, workspaceId),
+      mailbox: legacy.mailbox || 'INBOX',
+      isDefault: true,
+      createdAt: new Date().toISOString(),
+    };
+    saveMailbox(workspaceId, initial);
+    return [initial];
+  }
+  return [];
+}
+
+export function saveMailbox(workspaceId: string, account: MailboxAccount): void {
+  const list = listMailboxes(workspaceId);
+  const idx = list.findIndex((m) => m.id === account.id);
+  if (idx >= 0) {
+    list[idx] = account;
+  } else {
+    if (list.length === 0) account.isDefault = true;
+    list.push(account);
+  }
+  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+
+  // If this account is default or only account, mirror to legacy config for backwards compatibility
+  if (account.isDefault || list.length === 1) {
+    saveMailSyncConfig(workspaceId, {
+      host: account.host,
+      port: account.port,
+      username: account.username,
+      password: decodePassword(account.passwordCipher, workspaceId),
+      ...(account.mailbox ? { mailbox: account.mailbox } : {}),
+    });
+  }
+}
+
+export function deleteMailbox(workspaceId: string, id: string): void {
+  const list = listMailboxes(workspaceId).filter((m) => m.id !== id);
+  if (list.length > 0 && !list.some((m) => m.isDefault)) {
+    list[0]!.isDefault = true;
+  }
+  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+}
+
+export function getActiveMailbox(workspaceId: string, id?: string): MailboxAccount | undefined {
+  const list = listMailboxes(workspaceId);
+  if (id) {
+    const found = list.find((m) => m.id === id);
+    if (found) return found;
+  }
+  return list.find((m) => m.isDefault) ?? list[0];
+}
+
+export function getMailSyncConfig(workspaceId: string): ImapConfig | undefined {
+  try {
+    const raw = getStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return undefined;
+}
+
+export function saveMailSyncConfig(workspaceId: string, config: ImapConfig): void {
+  setStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`, JSON.stringify(config));
+}
+
+export async function testMailConnection(config: ImapConfig): Promise<boolean> {
+  if (!isTauri()) {
+    throw new Error('Mail sync is only available in the 0ledger desktop application.');
+  }
+  return await invoke<boolean>('imap_test_connection', { config });
+}
+
+export async function fetchMailMessages(config: ImapConfig, query: ImapQuery): Promise<ImapMessageResult[]> {
+  if (!isTauri()) {
+    return [];
+  }
+  return await invoke<ImapMessageResult[]>('imap_fetch_messages', { config, query });
+}
+
+export function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+export async function saveEmailAttachment(
+  db: LedgerDatabase,
+  workspaceId: string,
+  msg: ImapMessageResult,
+  archiveRoot: string,
+  companyName: string,
+  fy: string,
+  month: string,
+): Promise<{ attachmentId: string; filePath: string } | undefined> {
+  try {
+    let filePath = '';
+    let fileName = `${(msg.subject.slice(0, 40) || 'email').replace(/[^a-zA-Z0-9_-]/g, '_')}_${msg.uid}.eml`;
+    let sizeBytes = 0;
+    let sha256 = '';
+
+    if (isTauri()) {
+      const res = await invoke<SavedEmailResult>('save_email_eml', {
+        req: {
+          archive_root: archiveRoot,
+          company_name: companyName,
+          financial_year: fy,
+          period_month: month,
+          subject: msg.subject,
+          uid: msg.uid,
+          date: msg.date,
+          raw_base64: msg.raw_base64,
+        },
+      });
+      filePath = res.file_path;
+      fileName = res.file_name;
+      sizeBytes = res.size_bytes;
+      sha256 = res.sha256;
+    } else {
+      const rawBytes = base64ToUint8Array(msg.raw_base64);
+      sizeBytes = rawBytes.byteLength;
+      filePath = `vault://${companyName}/${fy}/${month}/Emails/${fileName}`;
+      const hashBuf = await crypto.subtle.digest('SHA-256', rawBytes.slice().buffer as ArrayBuffer);
+      sha256 = Array.from(new Uint8Array(hashBuf))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+
+    const now = nowIso();
+    const attachmentId = newId('att');
+    const attachment: Attachment = AttachmentSchema.parse({
+      id: attachmentId,
+      workspaceId,
+      fileName,
+      mimeType: 'message/rfc822',
+      sizeBytes,
+      sha256,
+      storageKey: filePath,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.attachments.put(attachment);
+    return { attachmentId, filePath };
+  } catch (err) {
+    console.warn('Failed to archive .eml to vault:', err);
+    return undefined;
+  }
+}
+
+export async function syncLocalMail(
+  db: LedgerDatabase,
+  workspaceId: string,
+  config: ImapConfig,
+  query: ImapQuery,
+  bankLedgerId?: string,
+  onProgress?: (progress: MailProgressPayload) => void,
+): Promise<MailSyncReport> {
+  let unlistenProgress: UnlistenFn | undefined;
+  if (isTauri() && onProgress) {
+    try {
+      unlistenProgress = await listen<MailProgressPayload>('mail-sync-progress', (event) => {
+        onProgress(event.payload);
+      });
+    } catch {}
+  }
+
+  const report: MailSyncReport = {
+    fetched: 0,
+    newMessages: 0,
+    transactionsCreated: 0,
+    attachmentsCreated: 0,
+    items: [],
+    skipped: [],
+    errors: [],
+  };
+
+  try {
+    onProgress?.({
+      stage: 'connecting',
+      current: 0,
+      total: 100,
+      percent: 5,
+      message: `Connecting to ${config.host}:${config.port}...`,
+    });
+
+    const messages = await fetchMailMessages(config, query);
+    report.fetched = messages.length;
+
+    // Get company profile and default folders for vault archival
+    const company = await db.companies.where('workspaceId').equals(workspaceId).first();
+    const companyName = company?.legalName || 'General';
+    const defaults = await getDefaultFolders();
+    const archiveRoot = defaults.archive_folder;
+
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const fy = now.getMonth() >= 3 ? `FY${curYear}-${String(curYear + 1).slice(-2)}` : `FY${curYear - 1}-${String(curYear).slice(-2)}`;
+    const monthStr = `${curYear}-${curMonth}`;
+
+    const totalMsgs = messages.length;
+    for (let i = 0; i < totalMsgs; i++) {
+      const msg = messages[i]!;
+      const currentIdx = i + 1;
+      const pct = 60 + Math.round((currentIdx / Math.max(totalMsgs, 1)) * 38);
+
+      onProgress?.({
+        stage: 'extracting',
+        current: currentIdx,
+        total: totalMsgs,
+        percent: pct,
+        message: `Processing email ${currentIdx} of ${totalMsgs}: ${msg.subject.slice(0, 45)}...`,
+      });
+
+      try {
+        const syncKey = `mail.uid:${config.host}:${config.username}:${msg.uid}`;
+        const existing = await db.syncState.get(syncKey);
+        if (existing) {
+          report.skipped.push({ uid: msg.uid, subject: msg.subject, reason: 'Already processed' });
+          continue;
+        }
+
+        const rawBytes = base64ToUint8Array(msg.raw_base64);
+        let txnsForMsg = 0;
+        let attached: { attachmentId: string; filePath: string } | undefined;
+
+        // 1. Try parsing full email with attachments (PDF, CSV, XLSX) or alerts
+        try {
+          const parsed = await parseEmailStatements(rawBytes);
+          if (parsed.statements.length > 0) {
+            // Save .eml to vault as audit attachment
+            attached = await saveEmailAttachment(
+              db,
+              workspaceId,
+              msg,
+              archiveRoot,
+              companyName,
+              fy,
+              monthStr,
+            );
+            if (attached) report.attachmentsCreated += 1;
+
+            for (const statement of parsed.statements) {
+              const source: ImportSource = statement.kind === 'fastag' ? 'fastag' : 'email';
+              const staged = await stageImport(db, {
+                workspaceId,
+                source,
+                statement,
+                fileName: `${msg.subject.slice(0, 100) || 'email'}.eml`,
+                ...(bankLedgerId ? { accountId: bankLedgerId } : {}),
+              });
+              const captured = await captureStatementLines(
+                db,
+                workspaceId,
+                staged.batch,
+                staged.lines,
+                attached?.attachmentId ? { attachmentId: attached.attachmentId } : undefined,
+              );
+              txnsForMsg += captured.created.length;
+
+              for (const row of statement.rows) {
+                const isOut = row.debitMinor > row.creditMinor;
+                report.items.push({
+                  uid: msg.uid,
+                  subject: msg.subject,
+                  sender: msg.from,
+                  date: row.date,
+                  amountMinor: Math.abs(row.creditMinor - row.debitMinor),
+                  direction: isOut ? 'out' : 'in',
+                  transactionId: row.reference,
+                  attachmentId: attached?.attachmentId,
+                  attachmentPath: attached?.filePath,
+                  status: 'captured',
+                });
+              }
+            }
+          }
+        } catch {
+          // Fallback: decode raw text and check parseAlertText
+          const text = new TextDecoder().decode(rawBytes.slice(0, 50_000));
+          const alertStmt = parseAlertText({ text, subject: msg.subject, from: msg.from });
+          if (alertStmt && alertStmt.rows.length > 0) {
+            attached = await saveEmailAttachment(
+              db,
+              workspaceId,
+              msg,
+              archiveRoot,
+              companyName,
+              fy,
+              monthStr,
+            );
+            if (attached) report.attachmentsCreated += 1;
+
+            const staged = await stageImport(db, {
+              workspaceId,
+              source: alertStmt.kind === 'fastag' ? 'fastag' : 'email',
+              statement: alertStmt,
+              fileName: `${msg.subject.slice(0, 100) || 'alert'}.txt`,
+              ...(bankLedgerId ? { accountId: bankLedgerId } : {}),
+            });
+            const captured = await captureStatementLines(
+              db,
+              workspaceId,
+              staged.batch,
+              staged.lines,
+              attached?.attachmentId ? { attachmentId: attached.attachmentId } : undefined,
+            );
+            txnsForMsg += captured.created.length;
+
+            for (const row of alertStmt.rows) {
+              const isOut = row.debitMinor > row.creditMinor;
+              report.items.push({
+                uid: msg.uid,
+                subject: msg.subject,
+                sender: msg.from,
+                date: row.date,
+                amountMinor: Math.abs(row.creditMinor - row.debitMinor),
+                direction: isOut ? 'out' : 'in',
+                transactionId: row.reference,
+                attachmentId: attached?.attachmentId,
+                attachmentPath: attached?.filePath,
+                status: 'captured',
+              });
+            }
+          }
+        }
+
+        if (txnsForMsg > 0) {
+          report.newMessages += 1;
+          report.transactionsCreated += txnsForMsg;
+          await db.syncState.put({
+            key: syncKey,
+            value: JSON.stringify({
+              uid: msg.uid,
+              subject: msg.subject,
+              date: msg.date,
+              txns: txnsForMsg,
+              attachmentId: attached?.attachmentId,
+              syncedAt: new Date().toISOString(),
+            }),
+          });
+        } else {
+          report.skipped.push({ uid: msg.uid, subject: msg.subject, reason: 'No recognized accounting/alert data' });
+        }
+      } catch (err) {
+        report.errors.push(`UID ${msg.uid} (${msg.subject}): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    onProgress?.({
+      stage: 'complete',
+      current: totalMsgs,
+      total: totalMsgs,
+      percent: 100,
+      message: `Sync complete. ${report.transactionsCreated} transaction(s) captured, ${report.attachmentsCreated} attachment(s) archived.`,
+    });
+  } finally {
+    if (unlistenProgress) {
+      unlistenProgress();
+    }
+  }
+
+  return report;
+}

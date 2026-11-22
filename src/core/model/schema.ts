@@ -1,13 +1,22 @@
 import { z } from 'zod';
 import {
   BILL_TYPES,
+  CLASSIFICATION_MATCH_TYPES,
+  CLASSIFICATION_RULE_SOURCES,
+  CLOSE_ITEM_OWNERS,
+  CLOSE_ITEM_STATUSES,
+  CLOSE_ITEM_TYPES,
   IMPORT_SOURCES,
   IMPORT_STATUSES,
   LEDGER_NATURES,
   MATCH_STATUSES,
+  MONEY_EVENT_DIRECTIONS,
+  MONEY_EVENT_SOURCES,
+  MONEY_EVENT_STATUSES,
   NUMBERING_RESET_PERIODS,
   PARTY_TYPES,
   RECONCILIATION_METHODS,
+  READINESS_STATUSES,
   RECONCILIATION_STATUSES,
   ROUNDING_MODES,
   TALLY_PRIMARY_GROUPS,
@@ -363,6 +372,7 @@ export const VoucherSchema = z
     roundOffLedgerId: entityId.optional(),
     source: VoucherSourceSchema.default('manual'),
     sourceRef: z.string().max(512).optional(),
+    reversesVoucherId: entityId.optional(),
     groupIds: z.array(entityId).default([]),
     accountingId: z.string().max(128).optional(),
     tags: z.array(z.string().max(64)).default([]),
@@ -394,6 +404,7 @@ export const NewVoucherSchema = z
     roundOffLedgerId: entityId.optional(),
     source: VoucherSourceSchema.default('manual'),
     sourceRef: z.string().max(512).optional(),
+    reversesVoucherId: entityId.optional(),
     groupIds: z.array(entityId).default([]),
     accountingId: z.string().max(128).optional(),
     tags: z.array(z.string().max(64)).default([]),
@@ -569,6 +580,130 @@ export const DriveLinkSchema = z
   .merge(TimestampedSchema)
   .strict();
 
+export const sha256HexString = z.string().regex(/^[0-9a-f]{64}$/, 'Expected lowercase sha256 hex');
+
+export const MoneyEventSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    source: z.enum(MONEY_EVENT_SOURCES),
+    sourceRef: z.string().max(512).optional(),
+    contentHash: sha256HexString,
+    statementLineId: entityId.optional(),
+    importBatchId: entityId.optional(),
+    bankLedgerId: entityId.optional(),
+    date: isoDate,
+    amountMinor: minorAmount,
+    direction: z.enum(MONEY_EVENT_DIRECTIONS),
+    partyHint: shortText.optional(),
+    narration: z.string().max(1024),
+    attachmentId: entityId.optional(),
+    confidence: z.number().min(0).max(1).default(0),
+    status: z.enum(MONEY_EVENT_STATUSES).default('captured'),
+    postedVoucherId: entityId.optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const ClassificationRuleSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    name: shortText,
+    priority: z.number().int().nonnegative().default(100),
+    enabled: z.boolean().default(true),
+    matchType: z.enum(CLASSIFICATION_MATCH_TYPES),
+    pattern: z.string().min(1).max(512),
+    ledgerId: entityId,
+    partyId: entityId.optional(),
+    taxHint: z.string().max(64).optional(),
+    confidence: z.number().min(0).max(1).default(0.8),
+    source: z.enum(CLASSIFICATION_RULE_SOURCES).default('seed'),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const ClassificationSuggestionSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    moneyEventId: entityId,
+    ledgerId: entityId.optional(),
+    partyId: entityId.optional(),
+    taxHint: z.string().max(64).optional(),
+    confidence: z.number().min(0).max(1).default(0),
+    reasons: z.array(z.string().max(256)).default([]),
+    ruleId: entityId.optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const CloseItemSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    period: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'),
+    dedupeKey: z.string().min(1).max(256),
+    type: z.enum(CLOSE_ITEM_TYPES),
+    status: z.enum(CLOSE_ITEM_STATUSES).default('open'),
+    owner: z.enum(CLOSE_ITEM_OWNERS).default('owner'),
+    title: shortText,
+    evidence: z.string().max(2048).optional(),
+    note: longText.optional(),
+    amountMinor: minorAmount.optional(),
+    dueDate: isoDate.optional(),
+    sourceEntityId: z.string().max(128).optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const CaPackFileSchema = z
+  .object({
+    name: z.string().min(1).max(256),
+    sha256: sha256HexString,
+    bytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const CaPackManifestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    period: z.string().regex(/^\d{4}-\d{2}$/),
+    generatedAt: isoTimestamp,
+    voucherCount: z.number().int().nonnegative(),
+    statementLineCount: z.number().int().nonnegative(),
+    moneyEventCount: z.number().int().nonnegative(),
+    closeItemCount: z.number().int().nonnegative(),
+    files: z.array(CaPackFileSchema),
+  })
+  .strict();
+
+export const CaPackQuestionSchema = z
+  .object({
+    closeItemId: entityId,
+    title: shortText,
+    note: longText.optional(),
+    evidence: z.string().max(2048).optional(),
+  })
+  .strict();
+
+export const CaPackSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    period: z.string().regex(/^\d{4}-\d{2}$/),
+    generatedAt: isoTimestamp,
+    manifest: CaPackManifestSchema,
+    voucherIds: z.array(entityId),
+    readiness: z.number().int().min(0).max(100),
+    readinessStatus: z.enum(READINESS_STATUSES),
+    missingItems: z.array(z.string().max(512)),
+    questionsForCa: z.array(CaPackQuestionSchema),
+    contentHash: sha256HexString,
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
 export type CompanySettings = z.infer<typeof CompanySettingsSchema>;
 export type CompanyProfile = z.infer<typeof CompanyProfileSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
@@ -600,3 +735,11 @@ export type Reconciliation = z.infer<typeof ReconciliationSchema>;
 export type StatementLine = z.infer<typeof StatementLineSchema>;
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
 export type DriveLink = z.infer<typeof DriveLinkSchema>;
+export type MoneyEvent = z.infer<typeof MoneyEventSchema>;
+export type ClassificationRule = z.infer<typeof ClassificationRuleSchema>;
+export type ClassificationSuggestion = z.infer<typeof ClassificationSuggestionSchema>;
+export type CloseItem = z.infer<typeof CloseItemSchema>;
+export type CaPackFile = z.infer<typeof CaPackFileSchema>;
+export type CaPackManifest = z.infer<typeof CaPackManifestSchema>;
+export type CaPackQuestion = z.infer<typeof CaPackQuestionSchema>;
+export type CaPack = z.infer<typeof CaPackSchema>;

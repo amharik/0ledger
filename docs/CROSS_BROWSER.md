@@ -1,28 +1,18 @@
-# Cross-browser evaluation
+# Cross-browser & Platform Evolution
 
-The current target is **Chromium Manifest V3**. This is an evaluation, not a support claim.
+## Architectural Transition: Browser Extension → Native Desktop App (Tauri)
 
-| Area | Chrome/Edge | Firefox | Safari |
-| --- | --- | --- | --- |
-| MV3 background | Service worker | Event page / service worker depending on version | Limited MV3 support |
-| Side panel | `chrome.sidePanel` | No direct equivalent | No direct equivalent |
-| IndexedDB/OPFS | Supported | IndexedDB supported; OPFS support varies | IndexedDB supported; OPFS constraints |
-| `chrome.storage.local` | Supported | `browser.storage` via WebExtensions | Requires Safari Web Extension wrapper |
-| `chrome.identity.launchWebAuthFlow` | Supported | Different identity API | Requires native app / ASWebAuthenticationSession |
-| Google OAuth redirect | `chromiumapp.org` | Add-on redirect URL | Custom scheme / native flow |
-| Downloads / file inputs | Supported | Supported | Supported with wrapper |
+The initial prototype targeted Chromium Manifest V3. However, based on practical accounting and workflow constraints in the Indian SMB market, **the browser extension path is deprecated**, and 0ledger is now maintained exclusively as a native desktop application using **Tauri v2** across Linux, Windows, and macOS.
 
-## Findings
+### Why the Desktop Path Replaced MV3
 
-- **Firefox** is the closest port. The main blockers are the side panel (needs a sidebar_action or
-  popup fallback) and OAuth redirect plumbing. Core Dexie/parsing/reporting code is portable.
-- **Safari** needs a Safari Web Extension wrapper plus an OAuth strategy outside
-  `launchWebAuthFlow`. The side panel also needs a replacement UI surface.
-- WXT can emit multiple targets, but the UI and auth layers need explicit fallbacks before claiming
-  support.
+| Constraint | Chromium MV3 Extension | Tauri Desktop Application |
+|---|---|---|
+| **Tally Prime Integration** | Blocked by Chrome CORS & CSP rules connecting to `localhost:9000` | Native OS socket/HTTP calls directly to `http://localhost:9000` |
+| **Execution Lifecycle** | MV3 service workers terminate aggressively after 30s idle | Uninterrupted background processing for bank statement parsing |
+| **Storage & Quotas** | Browser IndexedDB eviction risks under disk pressure | Persistent OS storage + local file dropzones without quotas |
+| **Platform Consistency** | Different APIs between Chrome, Firefox, Safari | Single unified webview codebase (WebKitGTK on Linux, WebView2 on Windows) |
+| **Privacy & Security** | Bound to browser permission prompts & store review cycles | Self-contained, privacy-preserving desktop application |
 
-## Decision
-
-Ship Chromium first. Revisit Firefox after the hardening milestone; do not add browser-specific
-shims that are not tested in a real browser. Any port must keep the same local-first data model and
-must not add a backend.
+### Conclusion
+Active feature development, packaging, and commercialization focus entirely on the Tauri desktop path. Legacy WXT browser extension scripts remain available under `npm run build:mv3:deprecated` for backward reference only.

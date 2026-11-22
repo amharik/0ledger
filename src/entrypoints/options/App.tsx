@@ -11,9 +11,12 @@ import { getDb } from '@/core/db/db';
 import { createWorkspace } from '@/core/db/workspace-service';
 import type { Workspace } from '@/core/model';
 import ChartOfAccounts from '@/ui/ChartOfAccounts';
+import { ClassificationRulesPanel } from '@/ui/ClassificationRulesPanel';
 import DrivePanel from '@/ui/DrivePanel';
 import InterchangePanel from '@/ui/InterchangePanel';
 import StockItemsPanel from '@/ui/StockItemsPanel';
+import { TallyBridgePanel } from '@/ui/TallyBridgePanel';
+import { LicenseSettingsPanel } from '@/ui/LicenseSettingsPanel';
 import { getActiveWorkspaceId, listWorkspaces, setActiveWorkspaceId } from '@/ui/workspace';
 
 function errorMessage(cause: unknown): string {
@@ -252,6 +255,13 @@ export default function App() {
 
       {activeId ? (
         <section className="card">
+          <h2>Autopilot rules</h2>
+          <ClassificationRulesPanel workspaceId={activeId} />
+        </section>
+      ) : null}
+
+      {activeId ? (
+        <section className="card">
           <h2>Chart of accounts</h2>
           <ChartOfAccounts workspaceId={activeId} />
         </section>
@@ -281,6 +291,15 @@ export default function App() {
           <InterchangePanel workspaceId={activeId} />
         </section>
       ) : null}
+
+      {activeId ? (
+        <TallyBridgePanel workspaceId={activeId} onNotice={setNotice} />
+      ) : null}
+
+      <LicenseSettingsPanel
+        workspaceCreatedAt={activeWorkspace?.createdAt}
+        onNotice={setNotice}
+      />
 
       <section className="card">
         <h2>Encrypted backup</h2>

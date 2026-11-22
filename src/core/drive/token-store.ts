@@ -14,8 +14,38 @@ export interface StoredDriveAuth {
   tokens: DriveTokens;
 }
 
-async function getStorage(): Promise<chrome.storage.LocalStorageArea> {
-  return chrome.storage.local;
+interface UniversalStorage {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+async function getStorage(): Promise<UniversalStorage> {
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    return {
+      get: (key: string) => chrome.storage.local.get(key),
+      set: (items: Record<string, unknown>) => chrome.storage.local.set(items),
+      remove: (key: string) => chrome.storage.local.remove(key),
+    };
+  }
+  return {
+    get: async (key: string) => {
+      const raw = localStorage.getItem(key);
+      try {
+        return raw ? { [key]: JSON.parse(raw) } : {};
+      } catch {
+        return raw ? { [key]: raw } : {};
+      }
+    },
+    set: async (items: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(items)) {
+        localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+      }
+    },
+    remove: async (key: string) => {
+      localStorage.removeItem(key);
+    },
+  };
 }
 
 export async function saveDriveClientId(clientId: string): Promise<void> {

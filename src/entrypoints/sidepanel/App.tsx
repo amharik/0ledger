@@ -6,7 +6,11 @@ import { partyOutstanding, trialBalance, type TrialBalance } from '@/core/ledger
 import { formatMinor, parseAmountToMinor } from '@/core/money/money';
 import type { Ledger, StockItem, Voucher, VoucherType } from '@/core/model';
 import { useWorkspace } from '@/ui/workspace';
+import { CloseCockpit } from '@/ui/CloseCockpit';
+import { Gstr2bReconPanel } from '@/ui/Gstr2bReconPanel';
+import { TallyBridgePanel } from '@/ui/TallyBridgePanel';
 import { InvoiceEntry } from '@/ui/InvoiceEntry';
+import { MoneyInbox } from '@/ui/MoneyInbox';
 import { ReconciliationPanel } from '@/ui/ReconciliationPanel';
 import { ReportsPanel } from '@/ui/ReportsPanel';
 import { StatementImport } from '@/ui/StatementImport';
@@ -274,7 +278,14 @@ export default function App() {
           <button className="ghost" onClick={() => void reload()} disabled={loading}>
             Refresh
           </button>
-          <button className="ghost" onClick={() => chrome.runtime.openOptionsPage()}>
+          <button
+            className="ghost"
+            onClick={() => {
+              if (typeof chrome !== 'undefined' && chrome.runtime?.openOptionsPage) {
+                chrome.runtime.openOptionsPage();
+              }
+            }}
+          >
             Settings
           </button>
         </div>
@@ -292,7 +303,15 @@ export default function App() {
           <p className="muted">
             Create your company workspace in Settings. One workspace holds one company.
           </p>
-          <button onClick={() => chrome.runtime.openOptionsPage()}>Open settings</button>
+          <button
+            onClick={() => {
+              if (typeof chrome !== 'undefined' && chrome.runtime?.openOptionsPage) {
+                chrome.runtime.openOptionsPage();
+              }
+            }}
+          >
+            Open settings
+          </button>
         </section>
       ) : null}
 
@@ -336,6 +355,44 @@ export default function App() {
               </strong>
             </div>
           </section>
+
+          <MoneyInbox
+            workspaceId={bundle.workspace.id}
+            ledgers={ledgerList}
+            refreshToken={refreshToken}
+            onChanged={(message) => {
+              setNotice(message);
+              setFormError(undefined);
+              setRefreshToken((value) => value + 1);
+            }}
+          />
+
+          <CloseCockpit
+            workspaceId={bundle.workspace.id}
+            refreshToken={refreshToken}
+            onChanged={(message) => {
+              setNotice(message);
+              setFormError(undefined);
+              setRefreshToken((value) => value + 1);
+            }}
+          />
+
+          <Gstr2bReconPanel
+            workspaceId={bundle.workspace.id}
+            refreshToken={refreshToken}
+            onNotice={(msg) => {
+              setNotice(msg);
+              setFormError(undefined);
+            }}
+          />
+
+          <TallyBridgePanel
+            workspaceId={bundle.workspace.id}
+            onNotice={(msg) => {
+              setNotice(msg);
+              setFormError(undefined);
+            }}
+          />
 
           <section className="card">
             <div className="section-head">

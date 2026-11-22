@@ -95,3 +95,50 @@ export type ReconciliationMethod = (typeof RECONCILIATION_METHODS)[number];
 
 export const RECONCILIATION_STATUSES = ['suggested', 'confirmed', 'rejected'] as const;
 export type ReconciliationStatus = (typeof RECONCILIATION_STATUSES)[number];
+
+export const MONEY_EVENT_SOURCES = ['statement', 'email', 'manual', 'fastag'] as const;
+export type MoneyEventSource = (typeof MONEY_EVENT_SOURCES)[number];
+
+export const MONEY_EVENT_DIRECTIONS = ['in', 'out'] as const;
+export type MoneyEventDirection = (typeof MONEY_EVENT_DIRECTIONS)[number];
+
+export const MONEY_EVENT_STATUSES = [
+  'captured',
+  'suggested',
+  'needs_review',
+  'posted',
+  'ignored',
+  'duplicate',
+] as const;
+export type MoneyEventStatus = (typeof MONEY_EVENT_STATUSES)[number];
+
+export const CLASSIFICATION_MATCH_TYPES = [
+  'reference',
+  'amount-date-party',
+  'narration-keyword',
+  'party',
+  'tax-hint',
+] as const;
+export type ClassificationMatchType = (typeof CLASSIFICATION_MATCH_TYPES)[number];
+
+export const CLASSIFICATION_RULE_SOURCES = ['seed', 'owner'] as const;
+export type ClassificationRuleSource = (typeof CLASSIFICATION_RULE_SOURCES)[number];
+
+export const CLOSE_ITEM_TYPES = [
+  'unreconciled_bank',
+  'low_confidence',
+  'missing_document',
+  'tax_field',
+  'duplicate',
+  'voucher_error',
+] as const;
+export type CloseItemType = (typeof CLOSE_ITEM_TYPES)[number];
+
+export const CLOSE_ITEM_STATUSES = ['open', 'resolved', 'asked_ca', 'waived'] as const;
+export type CloseItemStatus = (typeof CLOSE_ITEM_STATUSES)[number];
+
+export const CLOSE_ITEM_OWNERS = ['owner', 'ca', 'system'] as const;
+export type CloseItemOwner = (typeof CLOSE_ITEM_OWNERS)[number];
+
+export const READINESS_STATUSES = ['ready', 'needs_review', 'not_ready'] as const;
+export type ReadinessStatus = (typeof READINESS_STATUSES)[number];

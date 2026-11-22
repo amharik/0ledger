@@ -54,8 +54,10 @@ const DRIVE_ORIGINS = [
 const GMAIL_ORIGINS = [...DRIVE_ORIGINS, 'https://gmail.googleapis.com/*'];
 
 async function requestOrigins(origins: string[]): Promise<void> {
-  const granted = await chrome.permissions.request({ origins });
-  if (!granted) throw new Error('Google API host permissions were not granted.');
+  if (typeof chrome !== 'undefined' && chrome.permissions?.request) {
+    const granted = await chrome.permissions.request({ origins });
+    if (!granted) throw new Error('Google API host permissions were not granted.');
+  }
 }
 
 export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
@@ -104,6 +106,9 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
       await saveDriveClientId(trimmed);
       const pair = await createPkcePair();
       const state = randomUrlSafe(24);
+      if (typeof chrome === 'undefined' || !chrome.identity) {
+        throw new Error('Google OAuth flow requires the browser extension or a configured desktop OAuth callback.');
+      }
       const redirectUri = chrome.identity.getRedirectURL();
       const authUrl = buildAuthUrl({
         clientId: trimmed,
@@ -154,6 +159,9 @@ export default function DrivePanel({ workspaceId }: { workspaceId: string }) {
       await saveDriveClientId(trimmed);
       const pair = await createPkcePair();
       const state = randomUrlSafe(24);
+      if (typeof chrome === 'undefined' || !chrome.identity) {
+        throw new Error('Google OAuth flow requires the browser extension or a configured desktop OAuth callback.');
+      }
       const redirectUri = chrome.identity.getRedirectURL();
       const authUrl = buildAuthUrl({
         clientId: trimmed,

@@ -14,13 +14,21 @@ export async function listWorkspaces(): Promise<Workspace[]> {
 }
 
 export async function getActiveWorkspaceId(): Promise<string | undefined> {
-  const stored = await chrome.storage.local.get(ACTIVE_WORKSPACE_KEY);
-  const value = stored[ACTIVE_WORKSPACE_KEY];
-  return typeof value === 'string' ? value : undefined;
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    const stored = await chrome.storage.local.get(ACTIVE_WORKSPACE_KEY);
+    const value = stored[ACTIVE_WORKSPACE_KEY];
+    return typeof value === 'string' ? value : undefined;
+  }
+  const value = localStorage.getItem(ACTIVE_WORKSPACE_KEY);
+  return value ?? undefined;
 }
 
 export async function setActiveWorkspaceId(workspaceId: string): Promise<void> {
-  await chrome.storage.local.set({ [ACTIVE_WORKSPACE_KEY]: workspaceId });
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    await chrome.storage.local.set({ [ACTIVE_WORKSPACE_KEY]: workspaceId });
+  } else {
+    localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId);
+  }
 }
 
 export async function resolveWorkspace(

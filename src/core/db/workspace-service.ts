@@ -1,12 +1,14 @@
 import { newId, nowIso, slugify, uniqueSlug } from '../ids';
 import type { RoundingMode } from '../money/money';
 import {
+  ClassificationRuleSchema,
   CompanyProfileSchema,
   LedgerGroupSchema,
   LedgerSchema,
   NumberingSchemeSchema,
   TALLY_PRIMARY_GROUPS,
   WorkspaceSchema,
+  type ClassificationRule,
   type CompanyProfile,
   type Ledger,
   type LedgerGroup,
@@ -16,6 +18,7 @@ import {
 import type { LedgerDatabase } from './db';
 import { markDriveDirty } from './sync-state';
 import {
+  DEFAULT_CLASSIFICATION_RULES,
   DEFAULT_LEDGERS,
   DEFAULT_NUMBERING,
   TALLY_GROUP_NATURE,
@@ -147,6 +150,29 @@ export async function createWorkspace(
     );
   });
 
+  const ledgerByName = new Map(ledgers.map((ledger) => [ledger.name, ledger]));
+  const classificationRules: ClassificationRule[] = DEFAULT_CLASSIFICATION_RULES.map((spec, index) => {
+    const ledger = ledgerByName.get(spec.ledgerName);
+    if (!ledger) throw new Error(`Default classification rule references missing ledger: ${spec.ledgerName}`);
+    return ClassificationRuleSchema.parse(
+      compact({
+        id: newId('rul'),
+        workspaceId,
+        name: spec.name,
+        priority: index + 1,
+        enabled: true,
+        matchType: spec.matchType,
+        pattern: spec.pattern,
+        ledgerId: ledger.id,
+        taxHint: spec.taxHint,
+        confidence: spec.confidence,
+        source: 'seed',
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+  });
+
   const numberingSchemes: NumberingScheme[] = DEFAULT_NUMBERING.map((spec) =>
     NumberingSchemeSchema.parse({
       id: newId('num'),
@@ -170,13 +196,21 @@ export async function createWorkspace(
 
   await db.transaction(
     'rw',
-    [db.workspaces, db.companies, db.ledgerGroups, db.ledgers, db.numberingSchemes],
+    [
+      db.workspaces,
+      db.companies,
+      db.ledgerGroups,
+      db.ledgers,
+      db.numberingSchemes,
+      db.classificationRules,
+    ],
     async () => {
       await db.workspaces.add(workspace);
       await db.companies.add(company);
       await db.ledgerGroups.bulkAdd(groups);
       await db.ledgers.bulkAdd(ledgers);
       await db.numberingSchemes.bulkAdd(numberingSchemes);
+      await db.classificationRules.bulkAdd(classificationRules);
     },
   );
 

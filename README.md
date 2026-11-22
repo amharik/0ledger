@@ -1,17 +1,19 @@
 # 0ledger
 
-Local-first, double-entry bookkeeping for Indian businesses — in a browser extension, with no backend.
+Local-first, double-entry bookkeeping and tax reconciliation for Indian businesses — built as a high-performance native desktop application powered by Tauri and React, with zero remote server backend.
 
-0ledger captures financial information from email, bank statements (PDF/CSV/Excel) and FASTag statements, turns it into a Tally-compatible ledger, and helps you reconcile it. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
+0ledger captures financial information from email, bank statements (PDF/CSV/Excel), OCR bills and FASTag statements, turns it into a Tally-compatible ledger, reconciles GSTR-2B Input Tax Credit (ITC), and helps you close books in under 15 minutes a month. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
-> Status: early development. Ledger core, vouchers, invoices, reports, stock valuation, ingestion, reconciliation, chart of accounts, encrypted backups, workbook rendering, Google Drive sync (Sheets mirror, monthly XLSX archives, pull/conflict/restore), and Tally/Beancount/CSV/OFX interchange are working. Chromium is the only supported target; see [docs/CROSS_BROWSER.md](docs/CROSS_BROWSER.md).
+> Status: Active desktop product. Managed as a native desktop application via Tauri (`npm run tauri:dev` / `npm run tauri:build`). The legacy Chromium MV3 extension path has been deprecated in favor of the Tauri desktop application, which provides direct local socket access to Tally Prime (`localhost:9000`), system-level file drag-and-drop, and unbounded local storage without browser quota restrictions.
 
 ## Why
 
-- **Local-first**: your ledger lives in IndexedDB on your machine; the extension works offline.
-- **No backend**: only Google APIs you explicitly authorize (optional).
-- **Portable**: open, plain-text-friendly model; exports to Tally XML, Beancount, CSV and OFX.
-- **Accountant-friendly**: Tally-style Dr/Cr vouchers, groups, parties, bill-wise tracking and reports.
+- **Local-first**: your ledger lives in IndexedDB/SQLite on your machine; the app works completely offline.
+- **No backend**: only Google APIs you explicitly authorize (optional). Raw financial data never touches remote servers.
+- **1-Year Free Pro Trial**: new workspaces include a 365-day full Pro trial with GSTR-2B reconciliation and Tally bridge unlocked.
+- **GSTR-2B Reconciler**: match GST portal 2B data with your purchase ledger to claim all eligible ITC and generate instant WhatsApp reminders for delinquent vendors.
+- **Tally Prime Live Bridge**: 1-click direct push to your local Tally Prime installation over `http://localhost:9000` without browser CORS limitations.
+- **Accountant-friendly**: generates an immutable, verified CA Close Pack (Tally XML, BRS, Trial Balance, GSTR-2B match, open exceptions).
 - **India-aware**: INR + paise integers, FY April–March, 10 major banks, FASTag, GST/TDS capture fields.
 - **Zero float money bugs**: every amount is an integer minor unit; round-off is always explicit.
 
@@ -55,22 +57,29 @@ Email / PDF / CSV / XLSX
           └──► monthly .xlsx archive + Tally/Beancount/CSV/OFX exports
 ```
 
-- **UI**: React + TypeScript, WXT, Manifest V3 (Chromium).
-- **Storage**: Dexie/IndexedDB; attachments in OPFS.
-- **Parsing**: pdf.js, PapaParse, ExcelJS, postal-mime.
-- **No remote code**, minimal permissions, optional Google scopes only.
+- **UI & Runtime**: React + TypeScript, Vite, Tauri v2 (Desktop native for Linux, Windows, macOS).
+- **Storage**: Dexie / IndexedDB with OPFS attachments.
+- **Parsing**: pdf.js, PapaParse, ExcelJS, postal-mime, client-side OCR.
+- **No remote code**, zero-backend architecture.
 
 ## Development
 
 ```bash
 npm install
-npm run dev        # load .output/chrome-mv3 (unpacked) in Chrome
-npm test           # core unit tests
-npm run compile    # type-check
-npm run build      # production build
+npm run dev            # run desktop app in development server mode (http://localhost:1420)
+npm run build          # production frontend build into dist-desktop/
+npm test               # core unit tests (136 tests)
+npm run compile        # strict type-check
+npm run tauri:dev      # run native desktop window with hot reload
+npm run tauri:build    # build release desktop binaries (.deb, .AppImage, .exe, .dmg)
+npm run tauri:build:debug # build debug desktop binary for local testing
 ```
 
-Chrome: `chrome://extensions` → enable Developer mode → **Load unpacked** → select `.output/chrome-mv3`.
+### Desktop Target (Primary)
+
+The application is bundled into native desktop binaries via Tauri. It has direct socket communication with local Tally Prime installations (`http://localhost:9000`), native file dropzones, and persistent offline storage.
+
+*(Note: Legacy MV3 browser extension builds can still be produced with `npm run build:mv3:deprecated` for historical reference, but all active feature development is on the Tauri desktop path).*
 
 ## Repository layout
 

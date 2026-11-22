@@ -20,7 +20,14 @@ export type IdPrefix =
   | 'imp'
   | 'stl'
   | 'rec'
-  | 'drv';
+  | 'drv'
+  | 'mev'
+  | 'rul'
+  | 'sug'
+  | 'cli'
+  | 'cap'
+  | 'g2b'
+  | 'rcn';
 
 const ID_PATTERN = /^[a-z]{2,6}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

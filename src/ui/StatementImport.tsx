@@ -15,6 +15,7 @@ import {
 import { parseTextStatement } from '@/core/ingest/parsers';
 import { MAX_INGEST_BYTES } from '@/core/ingest/limits';
 import { parseAlertText } from '@/core/ingest/email';
+import { captureStatementLines } from '@/core/autopilot';
 import { formatMinor } from '@/core/money/money';
 
 function errorMessage(cause: unknown): string {
@@ -157,6 +158,9 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     setError(undefined);
     setNotice(undefined);
     try {
+      if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.scripting) {
+        throw new Error('Active tab webmail capture requires running inside a browser extension.');
+      }
       const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       const tab = tabs[0];
       if (!tab?.id) throw new Error('No active tab found');
@@ -186,6 +190,23 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
       });
       accept([staged]);
       onChanged('Captured page statement');
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendToInbox() {
+    if (!activeBatch) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = await captureStatementLines(getDb(), workspaceId, activeBatch, rows);
+      setNotice(
+        `Added ${result.created.length} event${result.created.length === 1 ? '' : 's'} to the Autopilot inbox${result.duplicates ? ` · ${result.duplicates} duplicate skipped` : ''}`,
+      );
+      onChanged('Statement sent to Autopilot inbox');
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -300,12 +321,18 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
         />
       </label>
 
-      <div className="capture-row">
-        <button type="button" className="secondary" disabled={busy} onClick={() => void capturePage()}>
-          Capture bank email tab
-        </button>
-        <span className="muted small">Open the bank email or statement page in the active tab.</span>
-      </div>
+      {typeof chrome !== 'undefined' && chrome.tabs ? (
+        <div className="capture-row">
+          <button type="button" className="secondary" disabled={busy} onClick={() => void capturePage()}>
+            Capture bank email tab
+          </button>
+          <span className="muted small">Open the bank email or statement page in the active tab.</span>
+        </div>
+      ) : (
+        <div style={{ background: 'var(--panel)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', margin: '0.75rem 0' }}>
+          💡 <strong>Desktop Email Ingestion:</strong> In the Desktop Edition, you can drag & drop your saved email file (<code>.eml</code>) into the file dropzone above or paste the email alert text below to extract all transactions automatically.
+        </div>
+      )}
 
       <details>
         <summary className="muted small">Or paste statement text</summary>
@@ -395,6 +422,14 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
                   onClick={() => void commit()}
                 >
                   Post {activeBatch.totalLines} line{activeBatch.totalLines === 1 ? '' : 's'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void sendToInbox()}
+                >
+                  Send {activeBatch.totalLines} to Autopilot inbox
                 </button>
                 <button
                   type="button"

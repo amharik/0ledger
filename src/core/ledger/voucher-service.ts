@@ -8,7 +8,7 @@ import {
 } from '../model';
 import { compact } from '../util/objects';
 import type { LedgerDatabase } from '../db/db';
-import type { PostedVoucher } from './post-voucher';
+import { postVoucher, type PostedVoucher } from './post-voucher';
 import { LedgerValidationError, validateNewVoucherInput } from './validation';
 import { buildVoucherChildren, buildVoucherRecord } from './voucher-records';
 
@@ -216,4 +216,99 @@ export async function deleteVoucher(
     },
   );
   await markDriveDirty(db, existing.workspaceId);
+}
+
+export async function reverseVoucher(
+  db: LedgerDatabase,
+  voucherId: string,
+  options: VoucherMutationOptions & { date?: string; narration?: string } = {},
+): Promise<PostedVoucher> {
+  const original = await getPostedVoucher(db, voucherId);
+  if (!original) throw new Error(`Voucher not found: ${voucherId}`);
+  if (original.voucher.status !== 'regular') throw new Error('Only regular vouchers can be reversed');
+
+  const existing = await db.vouchers.where('workspaceId').equals(original.voucher.workspaceId).toArray();
+  if (existing.some((voucher) => voucher.reversesVoucherId === voucherId)) {
+    throw new Error('Voucher has already been reversed');
+  }
+  if (original.voucher.reversesVoucherId) throw new Error('A reversal voucher cannot be reversed');
+
+  const billByLine = new Map<string, typeof original.billAllocations>();
+  for (const allocation of original.billAllocations) {
+    const list = billByLine.get(allocation.voucherLineId) ?? [];
+    list.push(allocation);
+    billByLine.set(allocation.voucherLineId, list);
+  }
+  const costByLine = new Map<string, typeof original.costCenterAllocations>();
+  for (const allocation of original.costCenterAllocations) {
+    const list = costByLine.get(allocation.voucherLineId) ?? [];
+    list.push(allocation);
+    costByLine.set(allocation.voucherLineId, list);
+  }
+  const firstLineId = original.lines[0]?.id ?? '';
+  const taxByLine = new Map<string, typeof original.taxAllocations>();
+  for (const allocation of original.taxAllocations) {
+    const key = allocation.voucherLineId ?? firstLineId;
+    const list = taxByLine.get(key) ?? [];
+    list.push(allocation);
+    taxByLine.set(key, list);
+  }
+
+  return postVoucher(
+    db,
+    compact({
+      workspaceId: original.voucher.workspaceId,
+      voucherType: original.voucher.voucherType,
+      date: options.date ?? original.voucher.date,
+      narration:
+        options.narration ??
+        `Reversal of ${original.voucher.number}${original.voucher.narration ? `: ${original.voucher.narration}` : ''}`,
+      partyLedgerId: original.voucher.partyLedgerId,
+      effectiveDate: original.voucher.effectiveDate,
+      reference: original.voucher.reference,
+      placeOfSupply: original.voucher.placeOfSupply,
+      gstRegistration: original.voucher.gstRegistration,
+      reverseCharge: original.voucher.reverseCharge,
+      status: 'regular',
+      currency: original.voucher.currency,
+      source: 'system',
+      sourceRef: `reversal:${original.voucher.id}`,
+      reversesVoucherId: original.voucher.id,
+      groupIds: original.voucher.groupIds,
+      tags: original.voucher.tags,
+      lines: original.lines.map((line) => ({
+        lineNo: line.lineNo,
+        ledgerId: line.ledgerId,
+        amountMinor: -line.amountMinor,
+        currency: line.currency,
+        forexAmountMinor: line.forexAmountMinor === undefined ? undefined : -line.forexAmountMinor,
+        exchangeRate: line.exchangeRate,
+        narration: `Reversal of ${original.voucher.number}`,
+        hsnSac: line.hsnSac,
+        billAllocations: (billByLine.get(line.id) ?? []).map((allocation) => ({
+          billRef: allocation.billRef,
+          billType: allocation.billType,
+          amountMinor: -allocation.amountMinor,
+          dueDate: allocation.dueDate,
+          creditDays: allocation.creditDays,
+        })),
+        costCenterAllocations: (costByLine.get(line.id) ?? []).map((allocation) => ({
+          costCenterId: allocation.costCenterId,
+          amountMinor: -allocation.amountMinor,
+        })),
+        taxAllocations: (taxByLine.get(line.id) ?? []).map((allocation) => ({
+          ledgerId: allocation.ledgerId,
+          taxType: allocation.taxType,
+          amountMinor: -allocation.amountMinor,
+          taxableValueMinor:
+            allocation.taxableValueMinor === undefined ? undefined : -allocation.taxableValueMinor,
+          rate: allocation.rate,
+          hsnSac: allocation.hsnSac,
+          tdsSection: allocation.tdsSection,
+        })),
+      })),
+      items: [],
+    }),
+    { ...(options.actor ? { actor: options.actor } : {}) },
+  );
 }

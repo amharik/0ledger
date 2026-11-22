@@ -3,19 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local-first double-entry ledger for Indian businesses. Parse email, bank statements, and FASTag; mirror to Google Sheets.",
+  "description": "Local-first double-entry ledger and tax reconciliation for Indian businesses — native desktop app powered by Tauri.",
   "license": "MIT",
   "scripts": {
-    "dev": "wxt",
-    "build": "wxt build",
-    "zip": "wxt zip",
+    "dev": "vite --config vite.config.desktop.ts",
+    "build": "vite build --config vite.config.desktop.ts",
+    "tauri": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri",
+    "tauri:dev": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev",
+    "tauri:build": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
+    "tauri:build:debug": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --debug",
+    "dev:mv3:deprecated": "wxt",
+    "build:mv3:deprecated": "wxt build",
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:stress": "STRESS=1 vitest run tests/release-stress.test.ts",
-    "postinstall": "wxt prepare"
+    "test:stress": "STRESS=1 vitest run tests/release-stress.test.ts"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
     "dexie": "^4.4.7",
     "dexie-react-hooks": "^4.4.0",
     "exceljs": "^4.4.0",
@@ -27,6 +32,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6",
     "@types/chrome": "^0.3.7",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.3.0",

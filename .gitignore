@@ -4,6 +4,8 @@ node_modules/
 # build output
 .output/
 dist/
+dist-desktop/
+src-tauri/target/
 *.zip
 
 # wxt

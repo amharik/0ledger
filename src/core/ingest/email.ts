@@ -127,10 +127,61 @@ export interface AlertTextInput {
   date?: string;
 }
 
+export function extractTransactionId(text: string, subject?: string): string | undefined {
+  const combined = `${subject ?? ''}\n${text}`;
+
+  // 1. UPI Ref / RRN (12 digits) or UPI/CR/..., UPI/DR/..., UPI/P2A/...
+  const upiMatch =
+    combined.match(/\b(?:upi(?:\s*(?:ref|txn|reference)(?:\s*no)?)?|rrn)[:\s/#-]*(\d{12})\b/i) ??
+    combined.match(/upi\/[a-z0-9_-]+\/(\d{12})\b/i) ??
+    combined.match(/\b(?:rrn)[:\s#-]*([A-Za-z0-9]{10,16})\b/i);
+  if (upiMatch?.[1]) return upiMatch[1];
+
+  // 2. NEFT / RTGS UTR (e.g. HDFCN..., PUNBN..., SBIN..., or 16-22 characters)
+  const utrMatch =
+    combined.match(/\b(?:neft|rtgs|utr)(?:\s*(?:no|ref|txn|reference))?[:\s/#-]*([A-Z]{4}[A-Z0-9]{10,18})\b/i) ??
+    combined.match(/\b(?:utr)(?:\s*no)?[:\s#-]*([A-Z0-9]{12,22})\b/i);
+  if (utrMatch?.[1]) return utrMatch[1];
+
+  // 3. IMPS Reference
+  const impsMatch = combined.match(/\b(?:imps)(?:\s*(?:ref|txn|reference)(?:\s*no)?)?[:\s/#-]*([A-Za-z0-9]{10,16})\b/i);
+  if (impsMatch?.[1]) return impsMatch[1];
+
+  // 4. FASTag Toll Txn ID / Tag ID
+  const fastagMatch =
+    combined.match(/\b(?:toll\s*(?:txn|transaction)\s*id|txn\s*id|transaction\s*id)[:\s#-]*([A-Za-z0-9_-]{6,30})\b/i) ??
+    combined.match(/\b(?:tag\s*id)[:\s#-]*([A-Za-z0-9]{10,32})\b/i);
+  if (fastagMatch?.[1]) return fastagMatch[1];
+
+  // 5. E-Commerce Order ID / Invoice No
+  const orderMatch =
+    combined.match(/\b(?:order\s*(?:id|#))[:\s#-]*([0-9]{3}-[0-9]{7}-[0-9]{7})\b/i) ?? // Amazon format
+    combined.match(/\b(?:order\s*(?:id|#)|invoice\s*(?:no|#)|bill\s*(?:no|#))[:\s#-]*([A-Za-z0-9#-]{6,30})\b/i);
+  if (orderMatch?.[1]) return orderMatch[1];
+
+  // 6. Generic Txn / Ref ID fallback
+  const genericMatch = combined.match(/\b(?:ref|utr|txn|transaction)(?:\s*(?:no|id|ref|reference))?[:\s#-]*([A-Za-z0-9]{6,30})\b/i);
+  if (genericMatch?.[1]) return genericMatch[1];
+
+  return undefined;
+}
+
 export function parseAlertText(input: AlertTextInput): ParsedStatement | undefined {
   const body = `${input.subject ?? ''}\n${input.text}\n${input.html ? stripHtml(input.html) : ''}`;
-  const adapter = detectStatementAdapter(`${input.from ?? ''}\n${body}`, input.subject ?? '');
-  if (adapter.id === 'generic-bank' || adapter.id === 'generic-fastag') return undefined;
+  const haystack = `${input.from ?? ''}\n${body}`.toLowerCase();
+  const adapter = detectStatementAdapter(haystack, input.subject ?? '');
+
+  const isFastagText =
+    adapter.kind === 'fastag' ||
+    /(?:fastag|toll|nhai|ihmcl|plaza|toll deduction)/i.test(haystack);
+
+  const isBankOrPaymentText =
+    adapter.id !== 'generic-bank' ||
+    /(?:debited|credited|debit|credit|paid|payment|order|invoice|bill|withdraw|withdrawn|deposit|refund|recharge|purchase|toll|salary|interest)/i.test(
+      haystack,
+    );
+
+  if (!isFastagText && !isBankOrPaymentText) return undefined;
 
   const amountMatch = body.match(AMOUNT_PATTERN);
   if (!amountMatch) return undefined;
@@ -153,28 +204,45 @@ export function parseAlertText(input: AlertTextInput): ParsedStatement | undefin
   const lower = body.toLowerCase();
   const credit = /(?:credited|credit|deposit|received|refund|recharge)/.test(lower);
   const debit = /(?:debited|debit|withdraw|withdrawn|paid|payment|purchase|toll|deducted)/.test(lower);
-  const isDebit = debit && !credit ? true : credit && !debit ? false : adapter.kind === 'fastag';
+  const isDebit = debit && !credit ? true : credit && !debit ? false : isFastagText;
 
-  const reference =
-    body.match(/(?:ref|utr|txn|transaction)(?:\s*(?:no|id|ref))?[:\s#-]*([A-Z0-9]{6,})/i)?.[1] ?? undefined;
+  const reference = extractTransactionId(body, input.subject);
+
+  // Clean description
+  let description = input.subject?.trim();
+  if (!description || description.length < 5) {
+    const firstLine = body.trim().split('\n')[0] || '';
+    description = firstLine.slice(0, 200) || (isFastagText ? 'FASTag Toll Deduction' : 'Bank alert');
+  }
 
   const row: ParsedStatementRow = {
     date,
-    description: input.subject || body.trim().split('\n')[0] || 'Bank alert',
+    description: description.slice(0, 512),
     debitMinor: isDebit ? amount : 0,
     creditMinor: isDebit ? 0 : amount,
     currency: 'INR',
     raw: {
       ...(input.subject ? { subject: input.subject.slice(0, 512) } : {}),
       ...(input.from ? { from: input.from.slice(0, 256) } : {}),
+      ...(reference ? { reference } : {}),
     },
   };
   if (reference) row.reference = reference;
 
+  const kind = isFastagText ? 'fastag' : 'bank';
+  let adapterName = adapter.name;
+  if (adapter.id === 'generic-bank') {
+    if (/(?:amazon|flipkart|swiggy|zomato|uber|ola|blinkit|zepto|aws|google)/i.test(haystack)) {
+      adapterName = 'E-Commerce / Shopping Invoice';
+    } else {
+      adapterName = 'Bank / Payment Alert';
+    }
+  }
+
   return {
     adapterId: adapter.id,
-    adapterName: adapter.name,
-    kind: adapter.kind,
+    adapterName,
+    kind,
     currency: 'INR',
     rows: [row],
   };
