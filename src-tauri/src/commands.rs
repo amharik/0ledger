@@ -75,6 +75,8 @@ pub struct ImapQuery {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImapMessageResult {
     pub uid: u32,
+    pub uid_validity: Option<u32>,
+    pub mailbox: String,
     pub subject: String,
     pub from: String,
     pub date: String,
@@ -182,6 +184,36 @@ pub fn scan_inbox_folder_impl(folder_path: &str) -> Result<Vec<DiscoveredFile>, 
 }
 
 pub fn read_file_base64_impl(file_path: &str) -> Result<String, String> {
+    let path = Path::new(file_path);
+    // Security check 1: Reject path traversal
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err("Access denied: path traversal (..) is not permitted".to_string());
+        }
+    }
+
+    // Security check 2: Whitelist allowed extensions for financial/document ingest
+    let allowed_exts = [
+        "pdf", "csv", "xlsx", "xls", "eml", "txt", "json", "xml", "ofx", "qif", "png", "jpg", "jpeg", "tiff",
+    ];
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !allowed_exts.contains(&ext.as_str()) {
+        return Err(format!(
+            "Access denied: file extension '.{}' is not permitted for ingest",
+            ext
+        ));
+    }
+
+    // Security check 3: Max file size (50 MB)
+    let metadata = fs::metadata(path).map_err(|e| format!("Failed to inspect file: {}", e))?;
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err("File exceeds 50 MB limit".to_string());
+    }
+
     let bytes = fs::read(file_path).map_err(|e| format!("Failed to read file: {}", e))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
@@ -402,9 +434,10 @@ pub fn imap_fetch_messages_impl(
 
     notify("authenticating", 10, 100, 25, &format!("Authenticated as {}.", config.username));
     let mailbox = config.mailbox.as_deref().unwrap_or("INBOX");
-    session
+    let mb_data = session
         .select(mailbox)
         .map_err(|e| format!("Failed to select mailbox {}: {}", mailbox, e))?;
+    let uid_validity = mb_data.uid_validity;
 
     let days = query.days.unwrap_or(60);
     let since_date = chrono::Utc::now() - chrono::Duration::days(days as i64);
@@ -421,7 +454,6 @@ pub fn imap_fetch_messages_impl(
 
     let uids = session
         .search(&search_criteria)
-        .or_else(|_| session.search("ALL"))
         .map_err(|e| format!("IMAP search failed with criteria '{}': {}", search_criteria, e))?;
 
     let mut uids_to_inspect: Vec<u32> = uids.into_iter().collect();
@@ -535,6 +567,8 @@ pub fn imap_fetch_messages_impl(
 
                     results.push(ImapMessageResult {
                         uid,
+                        uid_validity,
+                        mailbox: mailbox.to_string(),
                         subject,
                         from,
                         date,

@@ -30,6 +30,14 @@ export interface ParsedEmailAttachment {
   bytes: ArrayBuffer;
 }
 
+export interface EmailAuthenticationStatus {
+  dmarc?: 'pass' | 'fail' | 'neutral' | 'none' | 'temperror' | 'permerror';
+  spf?: 'pass' | 'fail' | 'softfail' | 'neutral' | 'none' | 'temperror' | 'permerror';
+  dkim?: 'pass' | 'fail' | 'none' | 'neutral' | 'temperror' | 'permerror';
+  isAuthentic: boolean;
+  raw?: string;
+}
+
 export interface ParsedEmail {
   subject: string;
   from: string;
@@ -38,6 +46,7 @@ export interface ParsedEmail {
   text: string;
   attachments: ParsedEmailAttachment[];
   raw: { html?: string };
+  auth?: EmailAuthenticationStatus;
 }
 
 export type TransactionRail =
@@ -92,6 +101,36 @@ function bytesFrom(content: Attachment['content'], encoding?: string): ArrayBuff
   return content;
 }
 
+export function parseAuthenticationResults(headers: Array<{ key: string; value: string }>): EmailAuthenticationStatus {
+  const authHeader = headers.find((h) => h.key === 'authentication-results')?.value || '';
+  if (!authHeader) {
+    return { isAuthentic: true };
+  }
+
+  const dmarcMatch = authHeader.match(/\bdmarc=([a-z]+)/i);
+  const spfMatch = authHeader.match(/\bspf=([a-z]+)/i);
+  const dkimMatch = authHeader.match(/\bdkim=([a-z]+)/i);
+
+  const dmarc = dmarcMatch ? (dmarcMatch[1]!.toLowerCase() as EmailAuthenticationStatus['dmarc']) : undefined;
+  const spf = spfMatch ? (spfMatch[1]!.toLowerCase() as EmailAuthenticationStatus['spf']) : undefined;
+  const dkim = dkimMatch ? (dkimMatch[1]!.toLowerCase() as EmailAuthenticationStatus['dkim']) : undefined;
+
+  let isAuthentic = true;
+  if (dmarc === 'fail' || dmarc === 'permerror') {
+    isAuthentic = false;
+  } else if (spf === 'fail' && dkim === 'fail') {
+    isAuthentic = false;
+  }
+
+  return {
+    ...(dmarc ? { dmarc } : {}),
+    ...(spf ? { spf } : {}),
+    ...(dkim ? { dkim } : {}),
+    isAuthentic,
+    raw: authHeader.slice(0, 500),
+  };
+}
+
 export async function parseEmail(source: string | ArrayBuffer | Uint8Array): Promise<ParsedEmail> {
   if (typeof source === 'string') assertTextLimit(source, 'Email');
   else assertByteLimit(source, 'Email');
@@ -99,6 +138,7 @@ export async function parseEmail(source: string | ArrayBuffer | Uint8Array): Pro
   if (email.attachments.length > MAX_EMAIL_ATTACHMENTS) {
     throw new Error(`Email has too many attachments (max ${MAX_EMAIL_ATTACHMENTS})`);
   }
+  const auth = parseAuthenticationResults(email.headers ?? []);
   return {
     subject: email.subject ?? '',
     from: email.from?.address ?? '',
@@ -111,6 +151,7 @@ export async function parseEmail(source: string | ArrayBuffer | Uint8Array): Pro
       bytes: bytesOf(attachment),
     })),
     raw: email.html ? { html: email.html.slice(0, MAX_EMAIL_BODY_CHARS) } : {},
+    auth,
   };
 }
 
@@ -335,21 +376,32 @@ export function extractTransactionId(
 
 /**
  * Computes canonical deduplication hash:
- * 1. Exact Key: when reference ID is present: SHA256('exact|' + txnId)
+ * 1. Exact Key: when reference ID is present: SHA256('exact|' + scope + '|' + txnId)
+ *    - For payment rails (UPI/RTGS/NEFT/IMPS), reference is globally unique nationwide.
+ *    - For other references (cards, orders, generic), scoped to account and instrument.
  * 2. Windowed Composite Key: when reference ID is absent, clusters by 72-hour sliding window
- *    + accountTail + normalized amount + direction + payee.
+ *    + accountScope + instrument + normalized amount + direction + payee.
  */
 export async function computeTransactionDedupeKey(params: {
   transactionId?: string;
+  rail?: TransactionRail;
   messageId?: string;
   accountTail?: string;
+  accountId?: string;
+  instrument?: string;
   date: string;
   amountMinor: number;
   direction: string;
   payee?: string;
 }): Promise<string> {
+  const accountScope = (params.accountId ?? params.accountTail ?? '').trim().toLowerCase();
+  const instrument = (params.instrument ?? '').trim().toLowerCase();
+  const fullAccountScope = [accountScope, instrument].filter(Boolean).join(':');
+
   if (params.transactionId) {
-    return sha256Hex(`exact|${params.transactionId.trim().toLowerCase()}`);
+    const isGlobalRail = params.rail && ['upi', 'rtgs', 'neft', 'imps'].includes(params.rail);
+    const scopePrefix = isGlobalRail ? 'global' : `acct:${fullAccountScope}`;
+    return sha256Hex(`exact|${scopePrefix}|${params.transactionId.trim().toLowerCase()}`);
   }
   if (params.messageId) {
     return sha256Hex(`msgid|${params.messageId.trim().toLowerCase()}`);
@@ -363,7 +415,7 @@ export async function computeTransactionDedupeKey(params: {
   return sha256Hex(
     [
       'window',
-      params.accountTail ?? '',
+      fullAccountScope,
       windowBucket,
       params.amountMinor,
       params.direction.toLowerCase(),

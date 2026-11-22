@@ -42,6 +42,8 @@ export interface ImapQuery {
 
 export interface ImapMessageResult {
   uid: number;
+  uid_validity?: number;
+  mailbox?: string;
   subject: string;
   from: string;
   date: string;
@@ -114,6 +116,13 @@ function setStorageItem(key: string, value: string): void {
   } else {
     memoryStore.set(key, value);
   }
+}
+
+function removeStorageItem(key: string): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(key);
+  }
+  memoryStore.delete(key);
 }
 
 export function clearMailSyncStorage(workspaceId?: string): void {
@@ -194,6 +203,8 @@ export function listMailboxes(workspaceId: string): MailboxAccount[] {
         createdAt: new Date().toISOString(),
       };
       setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify([initial]));
+      // Wipe legacy config to remove plaintext password from localStorage and memoryStore
+      removeStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
       return [initial];
     }
   } catch {}
@@ -219,16 +230,8 @@ export function saveMailbox(workspaceId: string, account: MailboxAccount): void 
   }
   setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
 
-  // If this account is default or only account, mirror to legacy config for backwards compatibility
-  if (account.isDefault || list.length === 1) {
-    saveMailSyncConfig(workspaceId, {
-      host: account.host,
-      port: account.port,
-      username: account.username,
-      password: decodePassword(account.passwordCipher, workspaceId),
-      ...(account.mailbox ? { mailbox: account.mailbox } : {}),
-    });
-  }
+  // Purge any residual legacy plaintext storage to prevent credential leaks
+  removeStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
 }
 
 export function deleteMailbox(workspaceId: string, id: string): void {
@@ -436,8 +439,11 @@ export async function syncLocalMail(
       });
 
       try {
-        const syncKey = `mail.uid:${config.host}:${config.username}:${msg.uid}`;
-        const existing = await db.syncState.get(syncKey);
+        const mailboxName = msg.mailbox || config.mailbox || 'INBOX';
+        const uidValidity = msg.uid_validity ?? 0;
+        const syncKey = `mail.uid:${config.host}:${config.username}:${mailboxName}:${uidValidity}:${msg.uid}`;
+        const legacyKey = `mail.uid:${config.host}:${config.username}:${msg.uid}`;
+        const existing = (await db.syncState.get(syncKey)) ?? (await db.syncState.get(legacyKey));
         if (existing) {
           report.skipped.push({ uid: msg.uid, subject: msg.subject, reason: 'Already processed' });
           continue;

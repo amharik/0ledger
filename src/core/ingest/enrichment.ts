@@ -69,7 +69,7 @@ export interface StatementEnrichmentResult {
     transactionId?: string;
     matchedType: 'money_event' | 'voucher' | 'none';
     matchedId?: string;
-    actionTaken: 'enriched_event' | 'reconciled_voucher' | 'none';
+    actionTaken: 'enriched_event' | 'reconciled_voucher' | 'ambiguous_candidate' | 'none';
   }>;
 }
 
@@ -167,28 +167,80 @@ export async function enrichLedgerEntriesFromStatement(
       extractTransactionId(line.description) ||
       (typeof line.raw?.reference === 'string' ? line.raw.reference : undefined);
 
-    let matchedEvent: MoneyEvent | undefined;
-    let matchedVoucher: Voucher | undefined;
+    // 1. Candidate scoring against MoneyEvents
+    const eventCandidates: Array<{
+      event: MoneyEvent;
+      score: number;
+      method: 'reference' | 'amount-date';
+      daysDiff: number;
+    }> = [];
 
-    // 1. Try matching by exact Transaction ID against MoneyEvents
-    if (txnId) {
-      matchedEvent = existingEvents.find((evt) => {
-        if (matchedEventIds.has(evt.id)) return false;
-        if (evt.sourceRef && evt.sourceRef.toLowerCase() === txnId.toLowerCase()) return true;
-        if (evt.narration.toLowerCase().includes(txnId.toLowerCase())) return true;
-        return false;
-      });
+    for (const evt of existingEvents) {
+      if (matchedEventIds.has(evt.id)) continue;
+
+      // Exact transaction ID match
+      if (txnId) {
+        if (
+          (evt.sourceRef && evt.sourceRef.toLowerCase() === txnId.toLowerCase()) ||
+          evt.narration.toLowerCase().includes(txnId.toLowerCase())
+        ) {
+          eventCandidates.push({ event: evt, score: 1.0, method: 'reference', daysDiff: 0 });
+          continue;
+        }
+      }
+
+      // Amount & direction match
+      if (evt.amountMinor === netAmount && evt.direction === direction) {
+        const evtDays = parseDateToDays(evt.date);
+        const daysDiff = Math.abs(evtDays - lineDays);
+        if (daysDiff <= toleranceDays) {
+          const lineTokens = line.description.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+          const evtTokens = evt.narration.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+          const hasMerchantOverlap = lineTokens.some((t) => evtTokens.includes(t));
+
+          let score = 0.7;
+          if (daysDiff === 0 && hasMerchantOverlap) score = 0.85;
+          else if (hasMerchantOverlap) score = 0.8;
+          else if (daysDiff === 0) score = 0.75;
+
+          eventCandidates.push({ event: evt, score, method: 'amount-date', daysDiff });
+        }
+      }
     }
 
-    // 2. Fuzzy Window Matching against MoneyEvents (± 3 days, same amount & direction)
-    if (!matchedEvent) {
-      matchedEvent = existingEvents.find((evt) => {
-        if (matchedEventIds.has(evt.id)) return false;
-        if (evt.amountMinor !== netAmount) return false;
-        if (evt.direction !== direction) return false;
-        const evtDays = parseDateToDays(evt.date);
-        return Math.abs(evtDays - lineDays) <= toleranceDays;
-      });
+    eventCandidates.sort((a, b) => b.score - a.score || a.daysDiff - b.daysDiff);
+
+    let matchedEvent: MoneyEvent | undefined;
+    let matchedScore = 0;
+    let matchedMethod: 'reference' | 'amount-date' = 'amount-date';
+
+    if (eventCandidates.length > 0) {
+      const topScore = eventCandidates[0]!.score;
+      const topCandidates = eventCandidates.filter((c) => c.score === topScore);
+
+      // Ambiguity check: multiple non-exact candidates with identical score
+      if (topCandidates.length > 1 && topScore < 1.0) {
+        await db.statementLines.update(line.id, {
+          matchStatus: 'suggested',
+          matchConfidence: 0.5,
+          updatedAt: now,
+        });
+        details.push({
+          lineNo: line.lineNo,
+          statementLineId: line.id,
+          date: line.date,
+          description: line.description,
+          ...(txnId ? { transactionId: txnId } : {}),
+          matchedType: 'money_event',
+          matchedId: topCandidates[0]!.event.id,
+          actionTaken: 'ambiguous_candidate',
+        });
+        continue;
+      }
+
+      matchedEvent = eventCandidates[0]!.event;
+      matchedScore = eventCandidates[0]!.score;
+      matchedMethod = eventCandidates[0]!.method;
     }
 
     // Process matched MoneyEvent
@@ -212,9 +264,9 @@ export async function enrichLedgerEntriesFromStatement(
               statementLineId: line.id,
               voucherId,
               amountMinor: netAmount,
-              method: txnId ? 'reference' : 'amount-date',
+              method: matchedMethod,
               status: 'confirmed',
-              confidence: 1.0,
+              confidence: matchedScore,
               note: `Auto-reconciled via statement transaction match (${txnId ?? line.date})`,
               createdAt: now,
               updatedAt: now,
@@ -227,7 +279,7 @@ export async function enrichLedgerEntriesFromStatement(
         await db.statementLines.update(line.id, {
           matchStatus: 'matched',
           matchedVoucherId: voucherId,
-          matchConfidence: 1.0,
+          matchConfidence: matchedScore,
           updatedAt: now,
         });
 
@@ -255,14 +307,14 @@ export async function enrichLedgerEntriesFromStatement(
         statementLineId: line.id,
         narration: enrichedNarration.slice(0, 1024),
         ...(txnId && !matchedEvent.sourceRef ? { sourceRef: txnId } : {}),
-        confidence: Math.max(matchedEvent.confidence, 0.95),
+        confidence: Math.max(matchedEvent.confidence, matchedScore),
         status: matchedEvent.status === 'captured' ? 'suggested' : matchedEvent.status,
         updatedAt: now,
       });
 
       await db.statementLines.update(line.id, {
         matchStatus: 'matched',
-        matchConfidence: 1.0,
+        matchConfidence: matchedScore,
         updatedAt: now,
       });
 
@@ -281,28 +333,72 @@ export async function enrichLedgerEntriesFromStatement(
     }
 
     // 3. If no MoneyEvent matched, check posted Vouchers directly
-    if (txnId) {
-      matchedVoucher = existingVouchers.find((v) => {
-        if (matchedVoucherIds.has(v.id)) return false;
-        if (v.reference && v.reference.toLowerCase().includes(txnId.toLowerCase())) return true;
-        if (v.narration && v.narration.toLowerCase().includes(txnId.toLowerCase())) return true;
-        return false;
-      });
-    }
+    let matchedVoucher: Voucher | undefined;
+    const voucherCandidates: Array<{
+      voucher: Voucher;
+      score: number;
+      method: 'reference' | 'amount-date';
+      daysDiff: number;
+    }> = [];
 
-    if (!matchedVoucher) {
-      matchedVoucher = existingVouchers.find((v) => {
-        if (matchedVoucherIds.has(v.id)) return false;
-        const vDays = parseDateToDays(v.date);
-        if (Math.abs(vDays - lineDays) > toleranceDays) return false;
-        // Check if voucher has matching line amount
+    for (const v of existingVouchers) {
+      if (matchedVoucherIds.has(v.id)) continue;
+
+      if (txnId) {
+        if (
+          (v.reference && v.reference.toLowerCase().includes(txnId.toLowerCase())) ||
+          (v.narration && v.narration.toLowerCase().includes(txnId.toLowerCase()))
+        ) {
+          voucherCandidates.push({ voucher: v, score: 1.0, method: 'reference', daysDiff: 0 });
+          continue;
+        }
+      }
+
+      const vDays = parseDateToDays(v.date);
+      const daysDiff = Math.abs(vDays - lineDays);
+      if (daysDiff <= toleranceDays) {
         const lines = voucherLinesByVoucherId.get(v.id) ?? [];
         const hasMatchingLine = lines.some((l) => Math.abs(l.amountMinor) === netAmount);
-        return hasMatchingLine;
-      });
+        if (hasMatchingLine) {
+          voucherCandidates.push({
+            voucher: v,
+            score: daysDiff === 0 ? 0.8 : 0.7,
+            method: 'amount-date',
+            daysDiff,
+          });
+        }
+      }
     }
 
-    if (matchedVoucher) {
+    voucherCandidates.sort((a, b) => b.score - a.score || a.daysDiff - b.daysDiff);
+
+    if (voucherCandidates.length > 0) {
+      const topVScore = voucherCandidates[0]!.score;
+      const topVCandidates = voucherCandidates.filter((c) => c.score === topVScore);
+
+      if (topVCandidates.length > 1 && topVScore < 1.0) {
+        await db.statementLines.update(line.id, {
+          matchStatus: 'suggested',
+          matchConfidence: 0.5,
+          updatedAt: now,
+        });
+        details.push({
+          lineNo: line.lineNo,
+          statementLineId: line.id,
+          date: line.date,
+          description: line.description,
+          ...(txnId ? { transactionId: txnId } : {}),
+          matchedType: 'voucher',
+          matchedId: topVCandidates[0]!.voucher.id,
+          actionTaken: 'ambiguous_candidate',
+        });
+        continue;
+      }
+
+      matchedVoucher = voucherCandidates[0]!.voucher;
+      const vScore = voucherCandidates[0]!.score;
+      const vMethod = voucherCandidates[0]!.method;
+
       matchedVoucherIds.add(matchedVoucher.id);
 
       const exists = existingReconciliations.some(
@@ -316,9 +412,9 @@ export async function enrichLedgerEntriesFromStatement(
             statementLineId: line.id,
             voucherId: matchedVoucher.id,
             amountMinor: netAmount,
-            method: txnId ? 'reference' : 'amount-date',
+            method: vMethod,
             status: 'confirmed',
-            confidence: 0.95,
+            confidence: vScore,
             note: `Auto-reconciled via direct voucher search (${txnId ?? line.date})`,
             createdAt: now,
             updatedAt: now,
@@ -330,7 +426,7 @@ export async function enrichLedgerEntriesFromStatement(
       await db.statementLines.update(line.id, {
         matchStatus: 'matched',
         matchedVoucherId: matchedVoucher.id,
-        matchConfidence: 0.95,
+        matchConfidence: vScore,
         updatedAt: now,
       });
 

@@ -284,7 +284,11 @@ export interface BalanceAssertion {
 }
 
 export function verifyStatementBalance(lines: StatementLine[]): BalanceAssertion {
-  const ordered = [...lines].sort((a, b) => a.lineNo - b.lineNo);
+  // Sort chronologically by date ascending; if dates match, preserve lineNo order
+  const ordered = [...lines].sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return a.lineNo - b.lineNo;
+  });
   let previousBalance: number | undefined;
   let openingMinor: number | undefined;
   let closingMinor: number | undefined;
