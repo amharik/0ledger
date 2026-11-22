@@ -16,6 +16,7 @@ import { ReconciliationPanel } from '@/ui/ReconciliationPanel';
 import ChartOfAccounts from '@/ui/ChartOfAccounts';
 import InterchangePanel from '@/ui/InterchangePanel';
 import DrivePanel from '@/ui/DrivePanel';
+import { ErrorBoundary } from '@/ui/ErrorBoundary';
 import { listParties, listStockItems, type PartyView } from '@/core/db/master-service';
 import type { StockItem } from '@/core/model';
 import { getDb } from '@/core/db/db';
@@ -228,7 +229,7 @@ export default function App() {
         ) : null}
 
         {bundle && !showNewCompany ? (
-          <>
+          <ErrorBoundary fallbackTitle="Panel Rendering Error">
             {activeTab === 'cockpit' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 <CloseCockpit
@@ -266,13 +267,15 @@ export default function App() {
             ) : null}
 
             {activeTab === 'mail' ? (
-              <MailSyncPanel
-                workspaceId={bundle.workspace.id}
-                onNotice={(msg) => {
-                  setNotice(msg);
-                  setRefreshToken((v) => v + 1);
-                }}
-              />
+              <ErrorBoundary fallbackTitle="Mail Sync Encountered an Issue">
+                <MailSyncPanel
+                  workspaceId={bundle.workspace.id}
+                  onNotice={(msg) => {
+                    setNotice(msg);
+                    setRefreshToken((v) => v + 1);
+                  }}
+                />
+              </ErrorBoundary>
             ) : null}
 
             {activeTab === 'import' ? (
@@ -347,7 +350,7 @@ export default function App() {
                 <DrivePanel workspaceId={bundle.workspace.id} />
               </div>
             ) : null}
-          </>
+          </ErrorBoundary>
         ) : null}
       </main>
     </div>

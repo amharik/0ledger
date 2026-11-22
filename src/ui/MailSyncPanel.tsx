@@ -30,10 +30,21 @@ const PROVIDER_PRESETS: Record<string, { host: string; port: number }> = {
 };
 
 export function MailSyncPanel({ workspaceId, onNotice }: Props) {
-  const [mailboxes, setMailboxes] = useState<MailboxAccount[]>(() => listMailboxes(workspaceId));
+  const [mailboxes, setMailboxes] = useState<MailboxAccount[]>(() => {
+    try {
+      return listMailboxes(workspaceId);
+    } catch (err) {
+      console.warn('Failed to list mailboxes:', err);
+      return [];
+    }
+  });
   const [selectedMailboxId, setSelectedMailboxId] = useState<string>(() => {
-    const active = getActiveMailbox(workspaceId);
-    return active?.id || '';
+    try {
+      const active = getActiveMailbox(workspaceId);
+      return active?.id || '';
+    } catch {
+      return '';
+    }
   });
 
   // Editor modal/card state

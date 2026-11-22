@@ -116,14 +116,35 @@ function setStorageItem(key: string, value: string): void {
   }
 }
 
+export function clearMailSyncStorage(workspaceId?: string): void {
+  if (workspaceId) {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(`${MAILBOXES_KEY}:${workspaceId}`);
+      localStorage.removeItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+    }
+    memoryStore.delete(`${MAILBOXES_KEY}:${workspaceId}`);
+    memoryStore.delete(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+  } else {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.clear();
+    }
+    memoryStore.clear();
+  }
+}
+
 // Safe password obfuscation/encryption using workspace-derived XOR cipher
 export function encodePassword(password: string, salt = '0ledger-key'): string {
   if (!password) return '';
-  const s = salt || '0ledger-key';
-  const chars = Array.from(password).map((c, i) =>
-    String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)),
-  );
-  return btoa(chars.join(''));
+  try {
+    const s = salt || '0ledger-key';
+    const utf8 = encodeURIComponent(password);
+    const chars = Array.from(utf8).map((c, i) =>
+      String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)),
+    );
+    return btoa(chars.join(''));
+  } catch {
+    return password;
+  }
 }
 
 export function decodePassword(cipher: string, salt = '0ledger-key'): string {
@@ -131,9 +152,14 @@ export function decodePassword(cipher: string, salt = '0ledger-key'): string {
   const s = salt || '0ledger-key';
   try {
     const decoded = atob(cipher);
-    return Array.from(decoded)
+    const raw = Array.from(decoded)
       .map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)))
       .join('');
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
   } catch {
     return cipher;
   }
@@ -146,39 +172,49 @@ export function listMailboxes(workspaceId: string): MailboxAccount[] {
   } catch {}
 
   // Fallback to single legacy config if present
-  const legacy = getMailSyncConfig(workspaceId);
-  if (legacy && legacy.username) {
-    const initial: MailboxAccount = {
-      id: 'mbx_default',
-      label: `${legacy.username} (${legacy.host.includes('gmail') ? 'Gmail' : 'IMAP'})`,
-      provider: legacy.host.includes('gmail')
-        ? 'gmail'
-        : legacy.host.includes('outlook')
-          ? 'outlook'
-          : legacy.host.includes('yahoo')
-            ? 'yahoo'
-            : 'custom',
-      host: legacy.host,
-      port: legacy.port,
-      username: legacy.username,
-      passwordCipher: encodePassword(legacy.password, workspaceId),
-      mailbox: legacy.mailbox || 'INBOX',
-      isDefault: true,
-      createdAt: new Date().toISOString(),
-    };
-    saveMailbox(workspaceId, initial);
-    return [initial];
-  }
+  try {
+    const legacy = getMailSyncConfig(workspaceId);
+    if (legacy && legacy.username) {
+      const initial: MailboxAccount = {
+        id: 'mbx_default',
+        label: `${legacy.username} (${legacy.host.includes('gmail') ? 'Gmail' : 'IMAP'})`,
+        provider: legacy.host.includes('gmail')
+          ? 'gmail'
+          : legacy.host.includes('outlook')
+            ? 'outlook'
+            : legacy.host.includes('yahoo')
+              ? 'yahoo'
+              : 'custom',
+        host: legacy.host,
+        port: legacy.port,
+        username: legacy.username,
+        passwordCipher: encodePassword(legacy.password, workspaceId),
+        mailbox: legacy.mailbox || 'INBOX',
+        isDefault: true,
+        createdAt: new Date().toISOString(),
+      };
+      setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify([initial]));
+      return [initial];
+    }
+  } catch {}
+
   return [];
 }
 
 export function saveMailbox(workspaceId: string, account: MailboxAccount): void {
-  const list = listMailboxes(workspaceId);
+  let list: MailboxAccount[] = [];
+  try {
+    const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
+    if (raw) list = JSON.parse(raw);
+  } catch {}
+
   const idx = list.findIndex((m) => m.id === account.id);
   if (idx >= 0) {
     list[idx] = account;
   } else {
-    if (list.length === 0) account.isDefault = true;
+    if (list.length === 0 || !list.some((m) => m.isDefault)) {
+      account.isDefault = true;
+    }
     list.push(account);
   }
   setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
@@ -196,7 +232,12 @@ export function saveMailbox(workspaceId: string, account: MailboxAccount): void 
 }
 
 export function deleteMailbox(workspaceId: string, id: string): void {
-  const list = listMailboxes(workspaceId).filter((m) => m.id !== id);
+  let list: MailboxAccount[] = [];
+  try {
+    const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
+    if (raw) list = JSON.parse(raw);
+  } catch {}
+  list = list.filter((m) => m.id !== id);
   if (list.length > 0 && !list.some((m) => m.isDefault)) {
     list[0]!.isDefault = true;
   }
