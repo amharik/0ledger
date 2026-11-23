@@ -1,6 +1,6 @@
 # 0ledger
 
-Local-first, double-entry bookkeeping and tax reconciliation for Indian businesses — built as a portable Rust financial engine with Tauri + React desktop and native Android/iOS shells, with zero remote server backend.
+Local-first, double-entry bookkeeping and tax reconciliation for Indian businesses — built as a portable Rust financial engine with Tauri + React desktop and native Android/iOS shells. There is no remote backend; an optional local server process handles IMAP fetch and authenticated API access.
 
 0ledger captures financial information from email, bank statements (PDF/CSV/Excel), OCR bills and FASTag statements, turns it into a Tally-compatible ledger, reconciles GSTR-2B Input Tax Credit (ITC), and helps you close books in under 15 minutes a month. It stores everything locally first and optionally mirrors to a dedicated Google Drive folder as a live Google Sheet plus monthly `.xlsx` archives.
 
@@ -9,7 +9,7 @@ Local-first, double-entry bookkeeping and tax reconciliation for Indian business
 ## Why
 
 - **Local-first**: your ledger lives in a local SQLite database managed by the Rust engine; the app works completely offline.
-- **No backend**: only Google APIs you explicitly authorize (optional). Raw financial data never touches remote servers.
+- **No remote backend**: an optional local server process handles IMAP fetch and authenticated API access. Only Google APIs you explicitly authorize (optional) receive data; raw financial data never touches a 0ledger-hosted service.
 - **1-Year Free Pro Trial**: new workspaces include a 365-day full Pro trial with GSTR-2B reconciliation and Tally bridge unlocked.
 - **GSTR-2B Reconciler**: match GST portal 2B data with your purchase ledger to claim all eligible ITC and generate instant WhatsApp reminders for delinquent vendors.
 - **Tally Prime Live Bridge**: 1-click direct push to your local Tally Prime installation over `http://localhost:9000` without browser CORS limitations.
@@ -63,24 +63,69 @@ Email / PDF / CSV / XLSX
 - **Storage**: SQLite via `zeroledger-storage` (WAL, migrations, audit chain, change log). Dexie/IndexedDB is a write-through cache for screens that have not moved to the native store yet; desktop reports read SQLite when it is available.
 - **Sync**: UI-agnostic, transport-agnostic change envelopes with last-writer-wins conflict resolution.
 - **Parsing**: pdf.js, PapaParse, ExcelJS, postal-mime, client-side OCR.
-- **No remote code**, zero-backend architecture.
+- **No remote code**; the optional API server runs locally and can be locked down with tenant tokens and TLS.
 
 ## Development
 
 ```bash
-npm install
-npm run dev            # run desktop app in development server mode (http://localhost:1420)
-npm run build          # production frontend build into dist-desktop/
-npm test               # core unit tests
-npm run compile        # strict type-check
-npm run tauri:dev      # run native desktop window with hot reload
-npm run tauri:build    # build release desktop binaries (.deb, .AppImage, .exe, .dmg)
-npm run tauri:build:debug # build debug desktop binary for local testing
+bun install
+bun run dev            # run desktop app in development server mode (http://127.0.0.1:3000, override with PORT)
+bun run build          # production frontend build into dist-desktop/
+bun run test           # core unit tests
+bun run compile        # strict type-check
+bun run tauri:dev      # run native desktop window with hot reload
+bun run tauri:build    # build release desktop binaries (.deb, .AppImage, .exe, .dmg)
+bun run tauri:build:debug # build debug desktop binary for local testing
 
 cargo test --workspace # Rust engine, storage and sync tests
 cargo clippy --workspace --all-targets -- -D warnings
 ./mobile/generate-bindings.sh  # regenerate Kotlin + Swift UniFFI bindings
 ```
+
+`npm` remains supported (`npm install`, `npm run dev`, `npm test`); Bun is used in CI and is the
+recommended package manager because `bun.lock` is authoritative.
+
+### Server port and host
+
+`server.config.ts` is the single source of truth for the development/production
+server address. The default port is `3000`; override it with `PORT=4100` and the
+same value is used by Vite and forwarded to Tauri's `devUrl` by
+`npm run tauri:dev`. The server binds to `127.0.0.1` by default; set
+`HOST=0.0.0.0` only when you intentionally expose it (for example in a
+container).
+
+### Server authentication, TLS and tenant isolation
+
+The optional local API server is secure by default for loopback development. Set
+`SERVER_AUTH_SECRET` (32+ characters in production) to require bearer tokens. Generate a token for a
+tenant and one or more workspaces:
+
+```bash
+export SERVER_AUTH_SECRET="$(openssl rand -base64 48)"
+bun run server:token -- --tenant acme --workspace ws_acme --ttl 3600
+```
+
+Send the token as `Authorization: Bearer <token>`, the workspace as `X-Workspace-Id`, and optionally
+`X-Tenant-Id`. The server rejects a mismatched tenant, a workspace outside the token grant, missing
+workspace headers, expired/tampered tokens, and any non-loopback bind without a signing secret.
+Tokens are HMAC-SHA256 signed and contain `tenantId`, `workspaceIds`, `subject`, `iat`, and `exp`.
+
+Additional hardening:
+
+- **TLS**: set `SERVER_TLS_CERT` and `SERVER_TLS_KEY` to serve HTTPS and enable HSTS.
+- **SSRF protection**: IMAP hosts resolving to private, loopback, link-local, or reserved addresses are
+  rejected. Set `ALLOW_PRIVATE_IMAP=true` only for trusted local mail servers.
+- **Rate limiting**: `SERVER_RATE_LIMIT_PER_MINUTE` defaults to 60 (max 1000), keyed by
+  tenant/workspace/client address.
+- **Pagination**: `/api/imap/fetch` accepts `limit` (max 50) and `cursor`, and returns `scanned`,
+  `matched`, `nextCursor`, and `hasMore`.
+- **Structured logs**: JSON request logs redact passwords, tokens, cookies, and credentials; use
+  `X-Request-Id` to correlate requests.
+
+Mailbox credentials are never written to IndexedDB or `localStorage`. On desktop they are stored in the
+OS keyring; in a browser they live only in memory for the session. Credentials are scoped by
+`tenantId`, workspace, and account id. Legacy XOR-encrypted credentials are migrated on first use and
+then stripped from storage.
 
 ### Desktop Target (Primary)
 
@@ -147,9 +192,9 @@ validation and numbering path; re-imports are deduplicated.
 
 ## Privacy & security
 
-- No 0ledger server. Nothing is uploaded unless you connect Google Drive/Sheets.
+- No remote 0ledger service. The optional API server runs locally; enable `SERVER_AUTH_SECRET` whenever it is exposed beyond loopback. Nothing is uploaded unless you connect Google Drive/Sheets.
 - Email bodies and statement contents are processed on-device. Parsed data is staged before commit.
-- Never stores mailbox passwords. Protected PDFs ask for a password at parse time; optional "remember this batch" is encrypted.
+- Mailbox passwords are stored in the OS keyring on desktop or in memory for the browser session; they are never written to IndexedDB or `localStorage`. Protected PDFs ask for a password at parse time; optional "remember this batch" is encrypted.
 - Google Sheets mirror is plaintext in your Drive by design; local data and backups can be encrypted.
 - Scanned PDFs without a text layer are flagged as requiring OCR; this build does not bundle OCR.
 
@@ -161,8 +206,8 @@ Bank and FASTag formats change. Adapters are data-driven; see [docs/ADAPTERS.md]
 
 ## Packaging
 
-`npm run build` writes `.output/chrome-mv3/`; `npm run zip` creates a distributable zip. See
-[docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
+`bun run build` writes the desktop frontend to `dist-desktop/`; `bun run tauri:build` produces native
+desktop installers. See [docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
 
 ## License
 

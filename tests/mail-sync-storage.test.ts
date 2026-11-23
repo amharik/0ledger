@@ -1,130 +1,164 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
   listMailboxes,
   saveMailbox,
   deleteMailbox,
   getActiveMailbox,
-  getMailSyncConfig,
-  saveMailSyncConfig,
-  encodePassword,
-  decodePassword,
+  getMailboxPassword,
   clearMailSyncStorage,
   type MailboxAccount,
 } from '@/core/desktop/mail-sync';
+import { clearServerClientConfig, setServerTenantId } from '@/core/server/server-client';
 
-describe('Mail Sync Local Storage & Account Management', () => {
+class MemoryStorage implements Storage {
+  private readonly data = new Map<string, string>();
+
+  get length(): number {
+    return this.data.size;
+  }
+
+  clear(): void {
+    this.data.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.data.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return [...this.data.keys()][index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.data.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.data.set(key, value);
+  }
+}
+
+function legacyCipher(password: string, salt: string): string {
+  const utf8 = encodeURIComponent(password);
+  const chars = Array.from(utf8).map((c, i) =>
+    String.fromCharCode(c.charCodeAt(0) ^ salt.charCodeAt(i % salt.length)),
+  );
+  return btoa(chars.join(''));
+}
+
+function account(id: string, username: string): MailboxAccount {
+  return {
+    id,
+    label: `Mailbox ${id}`,
+    provider: 'gmail',
+    host: 'imap.gmail.com',
+    port: 993,
+    username,
+    mailbox: 'INBOX',
+    isDefault: true,
+  };
+}
+
+describe('Mail Sync secure storage and tenant isolation', () => {
   const workspaceId = 'ws_test_mail_sync';
 
   beforeEach(() => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+    clearServerClientConfig();
+    setServerTenantId('tenant-a');
     clearMailSyncStorage(workspaceId);
   });
 
-  describe('encodePassword & decodePassword', () => {
-    it('round trips normal and complex app passwords safely', () => {
-      const passwords = [
-        'abcd efgh ijkl mnop',
-        'p@ssw0rd!#$*&()',
-        'SuperSecret2026',
-        'SpecialChars/\\:;"\'<>,.?~`',
-        'UnicodeText: ₹ ₹1000 🚀',
-      ];
-
-      for (const pwd of passwords) {
-        const cipher = encodePassword(pwd, workspaceId);
-        expect(cipher).not.toBe(pwd); // obfuscated
-        const decrypted = decodePassword(cipher, workspaceId);
-        expect(decrypted).toBe(pwd);
-      }
-    });
-
-    it('handles empty strings and corrupted ciphers gracefully without throwing', () => {
-      expect(encodePassword('')).toBe('');
-      expect(decodePassword('')).toBe('');
-      expect(decodePassword('not_valid_base64_%%%')).toBe('not_valid_base64_%%%');
-    });
+  afterEach(() => {
+    clearMailSyncStorage(workspaceId);
+    clearServerClientConfig();
+    vi.unstubAllGlobals();
   });
 
-  describe('listMailboxes & Legacy Migration (Recursion Prevention)', () => {
-    it('returns empty array when no accounts exist', () => {
-      const list = listMailboxes(workspaceId);
-      expect(list).toEqual([]);
-    });
+  it('stores no plaintext or cipher in local storage', async () => {
+    const box = account('mbx_1', 'primary@test.com');
+    await saveMailbox(workspaceId, box, 'super-secret-password');
 
-    it('seamlessly migrates legacy IMAP config without infinite recursion or stack overflow', () => {
-      // Setup legacy config
-      saveMailSyncConfig(workspaceId, {
+    const stored = localStorage.getItem(`0ledger.mailboxes:tenant-a:${workspaceId}`);
+    expect(stored).toBeTruthy();
+    expect(stored).not.toContain('super-secret-password');
+    expect(stored).not.toContain('passwordCipher');
+    expect(await getMailboxPassword(workspaceId, box.id)).toBe('super-secret-password');
+  });
+
+  it('isolates mailbox metadata and credentials between tenants', async () => {
+    const box = account('mbx_tenant_a', 'a@test.com');
+    await saveMailbox(workspaceId, box, 'tenant-a-password');
+    expect(await getMailboxPassword(workspaceId, box.id)).toBe('tenant-a-password');
+
+    setServerTenantId('tenant-b');
+    expect(listMailboxes(workspaceId)).toEqual([]);
+    expect(await getMailboxPassword(workspaceId, box.id)).toBeUndefined();
+
+    setServerTenantId('tenant-a');
+    expect(listMailboxes(workspaceId).map((item) => item.id)).toEqual([box.id]);
+    expect(await getMailboxPassword(workspaceId, box.id)).toBe('tenant-a-password');
+  });
+
+  it('migrates a legacy plaintext config without persisting the password', () => {
+    localStorage.setItem(
+      `0ledger.mail_sync.config:${workspaceId}`,
+      JSON.stringify({
         host: 'imap.gmail.com',
         port: 993,
         username: 'accounts@company.com',
         password: 'app-password-1234',
         mailbox: 'INBOX',
-      });
+      }),
+    );
 
-      // Verify getMailSyncConfig returns legacy
-      const legacy = getMailSyncConfig(workspaceId);
-      expect(legacy?.username).toBe('accounts@company.com');
+    const mailboxes = listMailboxes(workspaceId);
+    expect(mailboxes).toHaveLength(1);
+    expect(mailboxes[0]!.username).toBe('accounts@company.com');
+    expect(mailboxes[0]!.passwordCipher).toBeUndefined();
+    expect(localStorage.getItem(`0ledger.mail_sync.config:${workspaceId}`)).toBeNull();
 
-      // Calling listMailboxes MUST migrate cleanly without maximum call stack error!
-      const mailboxes = listMailboxes(workspaceId);
-      expect(mailboxes.length).toBe(1);
-      const migrated = mailboxes[0]!;
-      expect(migrated.username).toBe('accounts@company.com');
-      expect(migrated.provider).toBe('gmail');
-      expect(migrated.isDefault).toBe(true);
-      expect(decodePassword(migrated.passwordCipher, workspaceId)).toBe('app-password-1234');
-
-      // Subsequent call reads directly from migrated mailboxes store
-      const refreshed = listMailboxes(workspaceId);
-      expect(refreshed.length).toBe(1);
-      expect(refreshed[0]!.id).toBe(migrated.id);
-    });
+    const stored = localStorage.getItem(`0ledger.mailboxes:tenant-a:${workspaceId}`);
+    expect(stored).not.toContain('app-password-1234');
+    expect(stored).not.toContain('passwordCipher');
   });
 
-  describe('saveMailbox & deleteMailbox', () => {
-    it('saves new mailboxes, maintains default flags, and updates existing', () => {
-      const box1: MailboxAccount = {
-        id: 'mbx_1',
-        label: 'Primary Gmail',
-        provider: 'gmail',
-        host: 'imap.gmail.com',
-        port: 993,
-        username: 'primary@test.com',
-        passwordCipher: encodePassword('pass1', workspaceId),
-        mailbox: 'INBOX',
-        isDefault: true,
-      };
+  it('migrates legacy XOR ciphers and strips them from storage', async () => {
+    const legacy = account('mbx_legacy', 'legacy@test.com');
+    legacy.passwordCipher = legacyCipher('legacy-password', workspaceId);
+    localStorage.setItem(`0ledger.mailboxes:${workspaceId}`, JSON.stringify([legacy]));
 
-      const box2: MailboxAccount = {
-        id: 'mbx_2',
-        label: 'Outlook Alerts',
-        provider: 'outlook',
-        host: 'outlook.office365.com',
-        port: 993,
-        username: 'alerts@test.com',
-        passwordCipher: encodePassword('pass2', workspaceId),
-        mailbox: 'INBOX',
-      };
+    const mailboxes = listMailboxes(workspaceId);
+    expect(mailboxes[0]!.passwordCipher).toBeDefined();
+    expect(await getMailboxPassword(workspaceId, 'mbx_legacy')).toBe('legacy-password');
 
-      saveMailbox(workspaceId, box1);
-      saveMailbox(workspaceId, box2);
+    const stored = localStorage.getItem(`0ledger.mailboxes:tenant-a:${workspaceId}`);
+    expect(stored).not.toContain('passwordCipher');
+    expect(stored).not.toContain('legacy-password');
+  });
 
-      let list = listMailboxes(workspaceId);
-      expect(list.length).toBe(2);
-      expect(getActiveMailbox(workspaceId)?.id).toBe('mbx_1');
-      expect(getActiveMailbox(workspaceId, 'mbx_2')?.id).toBe('mbx_2');
+  it('saves, updates, defaults, and deletes mailboxes', async () => {
+    const box1 = account('mbx_1', 'primary@test.com');
+    const box2 = { ...account('mbx_2', 'alerts@test.com'), isDefault: false };
 
-      // Update box1 label
-      saveMailbox(workspaceId, { ...box1, label: 'Updated Gmail' });
-      list = listMailboxes(workspaceId);
-      expect(list.length).toBe(2);
-      expect(list.find((m) => m.id === 'mbx_1')?.label).toBe('Updated Gmail');
+    await saveMailbox(workspaceId, box1, 'pass1');
+    await saveMailbox(workspaceId, box2, 'pass2');
 
-      // Delete box1 -> box2 should become default
-      deleteMailbox(workspaceId, 'mbx_1');
-      list = listMailboxes(workspaceId);
-      expect(list.length).toBe(1);
-      expect(list[0]!.id).toBe('mbx_2');
-      expect(list[0]!.isDefault).toBe(true);
-    });
+    let list = listMailboxes(workspaceId);
+    expect(list).toHaveLength(2);
+    expect(getActiveMailbox(workspaceId)?.id).toBe('mbx_1');
+    expect(getActiveMailbox(workspaceId, 'mbx_2')?.id).toBe('mbx_2');
+
+    await saveMailbox(workspaceId, { ...box1, label: 'Updated Gmail' }, 'pass1');
+    list = listMailboxes(workspaceId);
+    expect(list).toHaveLength(2);
+    expect(list.find((item) => item.id === 'mbx_1')?.label).toBe('Updated Gmail');
+
+    await deleteMailbox(workspaceId, 'mbx_1');
+    list = listMailboxes(workspaceId);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.id).toBe('mbx_2');
+    expect(list[0]!.isDefault).toBe(true);
+    expect(await getMailboxPassword(workspaceId, 'mbx_1')).toBeUndefined();
   });
 });

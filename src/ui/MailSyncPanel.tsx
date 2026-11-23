@@ -7,8 +7,7 @@ import {
   getActiveMailbox,
   syncLocalMail,
   testMailConnection,
-  encodePassword,
-  decodePassword,
+  getMailboxPassword,
   type MailboxAccount,
   type ImapConfig,
   type MailPreset,
@@ -148,7 +147,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
     setTestResult(undefined);
   };
 
-  const openEditMailbox = (acc: MailboxAccount) => {
+  const openEditMailbox = async (acc: MailboxAccount) => {
     setIsEditNew(false);
     setEditTargetId(acc.id);
     setEditLabel(acc.label);
@@ -156,14 +155,14 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
     setEditHost(acc.host);
     setEditPort(acc.port);
     setEditUsername(acc.username);
-    setEditPassword(decodePassword(acc.passwordCipher, workspaceId));
+    setEditPassword((await getMailboxPassword(workspaceId, acc.id)) ?? '');
     setEditMailbox(acc.mailbox || 'INBOX');
     setEditing(true);
     setError(undefined);
     setTestResult(undefined);
   };
 
-  const handleSaveMailbox = () => {
+  const handleSaveMailbox = async () => {
     if (!editUsername.trim() || !editPassword.trim()) {
       setError('Please provide both the email address and app password.');
       return;
@@ -175,12 +174,11 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
       host: editHost.trim() || 'imap.gmail.com',
       port: editPort || 993,
       username: editUsername.trim(),
-      passwordCipher: encodePassword(editPassword.trim(), workspaceId),
       mailbox: editMailbox.trim() || 'INBOX',
       isDefault: mailboxes.length === 0 || (!isEditNew && activeAccount?.id === editTargetId),
       createdAt: new Date().toISOString(),
     };
-    saveMailbox(workspaceId, updated, editPassword.trim());
+    await saveMailbox(workspaceId, updated, editPassword.trim());
     const refreshed = listMailboxes(workspaceId);
     setMailboxes(refreshed);
     setSelectedMailboxId(updated.id);
@@ -189,9 +187,9 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
     onNotice(`Mailbox "${updated.label}" saved locally.`);
   };
 
-  const handleDeleteMailbox = (id: string) => {
+  const handleDeleteMailbox = async (id: string) => {
     if (confirm('Are you sure you want to remove this mailbox configuration?')) {
-      deleteMailbox(workspaceId, id);
+      await deleteMailbox(workspaceId, id);
       const refreshed = listMailboxes(workspaceId);
       setMailboxes(refreshed);
       if (refreshed.length > 0) {
@@ -210,22 +208,23 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
     const username = editing ? editUsername : activeAccount?.username || '';
     addLog('testing', `Testing connection to ${host}:${port} as ${username}...`);
     try {
+      const password = editing
+        ? editPassword
+        : activeAccount
+          ? ((await getMailboxPassword(workspaceId, activeAccount.id)) ?? '')
+          : '';
       const config: ImapConfig = {
         host,
         port,
         username,
-        password: editing
-          ? editPassword
-          : activeAccount
-            ? decodePassword(activeAccount.passwordCipher, workspaceId)
-            : '',
+        password,
         mailbox: editing ? editMailbox : activeAccount?.mailbox || 'INBOX',
       };
 
       if (!config.username.trim() || !config.password.trim()) {
         throw new Error('Please enter both your email address and app password.');
       }
-      await testMailConnection(config);
+      await testMailConnection(config, workspaceId);
       const msg = `✅ Connection successful! Authenticated with ${config.host} as ${config.username}.`;
       setTestResult(msg);
       addLog('testing', msg);
@@ -243,9 +242,9 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
       openAddMailbox();
       return;
     }
-    const plainPassword = decodePassword(activeAccount.passwordCipher, workspaceId);
-    if (!activeAccount.username.trim() || !plainPassword.trim()) {
-      openEditMailbox(activeAccount);
+    const plainPassword = await getMailboxPassword(workspaceId, activeAccount.id);
+    if (!activeAccount.username.trim() || !plainPassword?.trim()) {
+      await openEditMailbox(activeAccount);
       setError('Please configure credentials for this mailbox first.');
       return;
     }
@@ -535,7 +534,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
                   title="Edit mailbox"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openEditMailbox(acc);
+                    void openEditMailbox(acc);
                   }}
                 >
                   ✏️
@@ -554,7 +553,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
                     title="Delete mailbox"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleDeleteMailbox(acc.id);
+                      void handleDeleteMailbox(acc.id);
                     }}
                   >
                     🗑️
@@ -687,7 +686,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
               <button type="button" className="ghost small-button" disabled={testing} onClick={() => void handleTest()}>
                 {testing ? 'Testing…' : '🔌 Test Credentials'}
               </button>
-              <button type="button" className="secondary small-button" onClick={handleSaveMailbox}>
+              <button type="button" className="secondary small-button" onClick={() => void handleSaveMailbox()}>
                 💾 Save Mailbox
               </button>
             </div>

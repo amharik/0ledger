@@ -1,27 +1,33 @@
 import express from 'express';
-import type { Request, Response } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import { ImapFlow } from 'imapflow';
+import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  isLoopbackHost,
+  resolveServerHost,
+  resolveServerPort,
+  resolveServerProtocol,
+  resolveTlsOptions,
+} from './server.config.ts';
+import { log, requestLogger } from './server.logger.ts';
+import {
+  parseImapConfig,
+  parseImapQuery,
+  type ValidatedImapConfig,
+} from './server.schemas.ts';
+import { assertAllowedImapHost, rateLimit, securityHeaders } from './server.security.ts';
+import {
+  requireWorkspace,
+  resolveAuthConfig,
+  tenantAuth,
+  type AuthConfig,
+} from './server.tenancy.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-interface ImapConfigPayload {
-  host: string;
-  port: number;
-  username: string;
-  password: string;
-  mailbox?: string;
-  tls?: boolean;
-}
-
-interface ImapQueryPayload {
-  preset?: 'fastag' | 'bank' | 'shopping' | 'all' | 'custom';
-  custom_search?: string;
-  limit?: number;
-  days?: number;
-}
 
 interface ImapMessageResult {
   uid: number;
@@ -136,32 +142,11 @@ function matchesPreset(
   }
 }
 
-function validateConfig(raw: unknown): ImapConfigPayload {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error('IMAP configuration is required.');
-  }
-  const c = raw as Record<string, unknown>;
-  const host = typeof c.host === 'string' ? c.host.trim() : '';
-  const port = Number(c.port) || 993;
-  const username = typeof c.username === 'string' ? c.username.trim() : '';
-  const password = typeof c.password === 'string' ? c.password : '';
-  const mailbox =
-    typeof c.mailbox === 'string' && c.mailbox.trim() ? c.mailbox.trim() : 'INBOX';
-  const tls = typeof c.tls === 'boolean' ? c.tls : port === 993;
-
-  if (!host) throw new Error('IMAP host is required (e.g., imap.gmail.com).');
-  if (port < 1 || port > 65535) throw new Error('IMAP port must be between 1 and 65535.');
-  if (!username) throw new Error('Email address / username is required.');
-  if (!password) throw new Error('Password or App Password is required.');
-
-  return { host, port, username, password, mailbox, tls };
-}
-
-function createImapClient(config: ImapConfigPayload): ImapFlow {
+function createImapClient(config: ValidatedImapConfig): ImapFlow {
   return new ImapFlow({
     host: config.host,
     port: config.port,
-    secure: config.tls ?? config.port === 993,
+    secure: config.tls,
     auth: {
       user: config.username,
       pass: config.password,
@@ -173,7 +158,7 @@ function createImapClient(config: ImapConfigPayload): ImapFlow {
   });
 }
 
-function formatImapError(err: unknown, config: ImapConfigPayload): string {
+function formatImapError(err: unknown, config: ValidatedImapConfig): string {
   const raw = err instanceof Error ? err.message : String(err);
   const responseText =
     typeof err === 'object' && err !== null && 'responseText' in err
@@ -206,20 +191,78 @@ function formatImapError(err: unknown, config: ImapConfigPayload): string {
   return combined || 'IMAP connection failed.';
 }
 
-async function startServer() {
+function badRequest(res: Response, cause: unknown): void {
+  res.status(400).json({ ok: false, error: cause instanceof Error ? cause.message : String(cause) });
+}
+
+function envRateLimit(): number {
+  const raw = Number(process.env.SERVER_RATE_LIMIT_PER_MINUTE);
+  if (!Number.isInteger(raw) || raw < 1) return 60;
+  return Math.min(raw, 1000);
+}
+
+export interface CreateAppOptions {
+  serveFrontend?: boolean;
+  auth?: AuthConfig;
+  tls?: boolean;
+  allowPrivateImap?: boolean;
+  rateLimitMax?: number;
+  createImapClient?: (config: ValidatedImapConfig) => ImapFlow;
+  assertHost?: (host: string) => Promise<string>;
+}
+
+export async function createApp(options: CreateAppOptions = {}): Promise<Express> {
+  const auth = options.auth ?? resolveAuthConfig();
+  const tls = options.tls ?? resolveServerProtocol() === 'https';
+  const production = process.env.NODE_ENV === 'production';
+  const allowPrivateImap = options.allowPrivateImap ?? process.env.ALLOW_PRIVATE_IMAP === 'true';
+  const createClient = options.createImapClient ?? createImapClient;
+  const assertHost =
+    options.assertHost ??
+    ((host: string) => assertAllowedImapHost(host, { allowPrivate: allowPrivateImap }));
+
   const app = express();
+  app.disable('x-powered-by');
+  app.use(securityHeaders({ tls, production }));
+  app.use(requestLogger());
   app.use(express.json({ limit: '4mb' }));
 
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({
+      ok: true,
+      status: 'ok',
+      uptimeSeconds: Math.round(process.uptime()),
+      tenantIsolation: true,
+      tls,
+    });
+  });
+
+  app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+  app.use('/api', tenantAuth(auth));
+  app.use('/api', rateLimit({ max: options.rateLimitMax ?? envRateLimit() }));
+  app.use('/api/imap', requireWorkspace);
+
   app.post('/api/imap/test', async (req: Request, res: Response) => {
-    let config: ImapConfigPayload;
+    let config: ValidatedImapConfig;
     try {
-      config = validateConfig(req.body?.config ?? req.body);
+      config = parseImapConfig(req.body?.config ?? req.body);
     } catch (err) {
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      badRequest(res, err);
       return;
     }
 
-    const client = createImapClient(config);
+    try {
+      await assertHost(config.host);
+    } catch (err) {
+      log('warn', 'imap.host_rejected', { requestId: res.locals.requestId, host: config.host });
+      badRequest(res, err);
+      return;
+    }
+
+    const client = createClient(config);
     try {
       await client.connect();
       const listed = await client.list();
@@ -228,7 +271,7 @@ async function startServer() {
         .filter((folder): folder is string => Boolean(folder))
         .slice(0, 60);
 
-      const targetMailbox = config.mailbox || 'INBOX';
+      const targetMailbox = config.mailbox;
       const lock = await client.getMailboxLock(targetMailbox);
       let exists = 0;
       try {
@@ -250,34 +293,44 @@ async function startServer() {
     } catch (err) {
       await client.logout().catch(() => {});
       client.close();
+      log('warn', 'imap.test_failed', {
+        requestId: res.locals.requestId,
+        host: config.host,
+        error: err instanceof Error ? err.name : 'unknown',
+      });
       res.status(400).json({ ok: false, error: formatImapError(err, config) });
     }
   });
 
   app.post('/api/imap/fetch', async (req: Request, res: Response) => {
-    let config: ImapConfigPayload;
+    let config: ValidatedImapConfig;
+    let query: ReturnType<typeof parseImapQuery>;
     try {
-      config = validateConfig(req.body?.config);
+      config = parseImapConfig(req.body?.config);
+      query = parseImapQuery(req.body?.query ?? {});
     } catch (err) {
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      badRequest(res, err);
       return;
     }
 
-    const query: ImapQueryPayload = req.body?.query ?? {};
-    const preset = query.preset ?? 'bank';
-    const days = Math.max(1, Math.min(365, Number(query.days) || 60));
-    const limit = Math.max(1, Math.min(100, Number(query.limit) || 25));
-    const customSearch = typeof query.custom_search === 'string' ? query.custom_search.trim() : '';
+    try {
+      await assertHost(config.host);
+    } catch (err) {
+      log('warn', 'imap.host_rejected', { requestId: res.locals.requestId, host: config.host });
+      badRequest(res, err);
+      return;
+    }
 
-    const client = createImapClient(config);
+    const client = createClient(config);
     try {
       await client.connect();
-      const targetMailbox = config.mailbox || 'INBOX';
+      const targetMailbox = config.mailbox;
       const lock = await client.getMailboxLock(targetMailbox);
 
       const messages: ImapMessageResult[] = [];
       let scanned = 0;
       let matched = 0;
+      let nextCursor: number | undefined;
 
       try {
         const uidValidity =
@@ -287,21 +340,22 @@ async function startServer() {
             ? Number(client.mailbox.uidValidity ?? 0)
             : 0;
 
-        const since = new Date(Date.now() - days * 86_400_000);
+        const since = new Date(Date.now() - query.days * 86_400_000);
         const searchCriteria: Record<string, unknown> = { since };
-        if (customSearch && preset === 'custom') {
+        if (query.custom_search && query.preset === 'custom') {
           searchCriteria.or = [
-            { subject: customSearch },
-            { from: customSearch },
-            { body: customSearch },
+            { subject: query.custom_search },
+            { from: query.custom_search },
+            { body: query.custom_search },
           ];
         }
 
         const uidsResult = await client.search(searchCriteria, { uid: true });
         const allUids = Array.isArray(uidsResult) ? uidsResult : [];
-
-        // Newest first, scan up to 250 recent envelopes to stay responsive
-        const candidateUids = [...allUids].reverse().slice(0, 250);
+        const sortedUids = [...allUids].sort((a, b) => b - a);
+        const candidateUids = sortedUids
+          .filter((uid) => query.cursor === undefined || uid < query.cursor)
+          .slice(0, 250);
         const matchedUids: number[] = [];
 
         if (candidateUids.length > 0) {
@@ -316,16 +370,22 @@ async function startServer() {
             const from = fromAddr
               ? [fromAddr.name, fromAddr.address].filter(Boolean).join(' ')
               : '';
-            if (matchesPreset(preset, subject, from, preset === 'custom' ? customSearch : undefined)) {
+            if (
+              matchesPreset(
+                query.preset,
+                subject,
+                from,
+                query.preset === 'custom' ? query.custom_search : undefined,
+              )
+            ) {
               matchedUids.push(header.uid);
             }
           }
         }
 
-        // Keep newest matched UIDs up to limit
         matchedUids.sort((a, b) => b - a);
-        const toDownload = matchedUids.slice(0, limit);
         matched = matchedUids.length;
+        const toDownload = matchedUids.slice(0, query.limit);
 
         if (toDownload.length > 0) {
           for await (const msg of client.fetch(
@@ -353,6 +413,12 @@ async function startServer() {
             });
           }
         }
+
+        if (matchedUids.length > query.limit) {
+          nextCursor = toDownload[toDownload.length - 1];
+        } else if (candidateUids.length === 250) {
+          nextCursor = candidateUids[candidateUids.length - 1];
+        }
       } finally {
         lock.release();
       }
@@ -363,34 +429,145 @@ async function startServer() {
         messages,
         scanned,
         matched,
+        ...(nextCursor ? { nextCursor, hasMore: true } : { hasMore: false }),
       });
     } catch (err) {
       await client.logout().catch(() => {});
       client.close();
+      log('warn', 'imap.fetch_failed', {
+        requestId: res.locals.requestId,
+        host: config.host,
+        error: err instanceof Error ? err.name : 'unknown',
+      });
       res.status(400).json({ ok: false, error: formatImapError(err, config) });
     }
   });
 
-  if (process.env.NODE_ENV === 'production') {
-    const distDir = path.resolve(__dirname, 'dist-desktop');
-    app.use(express.static(distDir));
-    app.use((_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
-  } else {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      configFile: path.resolve(__dirname, 'vite.config.desktop.ts'),
-      server: { middlewareMode: true, hmr: false },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  app.use('/api', (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: 'API route not found.' });
+  });
+
+  if (options.serveFrontend !== false) {
+    if (production) {
+      const distDir = path.resolve(__dirname, 'dist-desktop');
+      app.use(express.static(distDir));
+      app.use((_req, res) => {
+        res.sendFile(path.join(distDir, 'index.html'));
+      });
+    } else {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        configFile: path.resolve(__dirname, 'vite.config.desktop.ts'),
+        server: { middlewareMode: true, hmr: false },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    }
   }
 
-  const port = Number(process.env.PORT) || 3000;
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`0ledger server running on http://0.0.0.0:${port}`);
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const status =
+      typeof err === 'object' && err !== null && 'status' in err
+        ? Number((err as { status?: unknown }).status)
+        : 500;
+    const safeStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 500;
+    log('error', 'http.error', {
+      requestId: res.locals.requestId,
+      method: req.method,
+      path: req.path,
+      status: safeStatus,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(safeStatus).json({
+      ok: false,
+      error: safeStatus === 400 ? 'Invalid request body.' : 'Internal server error.',
+    });
   });
+
+  return app;
 }
 
-void startServer();
+export async function startServer(): Promise<http.Server | https.Server> {
+  const port = resolveServerPort();
+  const host = resolveServerHost();
+  const tls = resolveTlsOptions();
+  const auth = resolveAuthConfig();
+  const protocol = tls ? 'https' : 'http';
+
+  if (!auth.required && !isLoopbackHost(host)) {
+    throw new Error(
+      'SERVER_AUTH_SECRET is required when binding the server to a non-loopback host.',
+    );
+  }
+
+  const app = await createApp({ auth, tls: Boolean(tls) });
+  const server = tls ? https.createServer(tls, app) : http.createServer(app);
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+
+  log('info', 'server.start', {
+    host,
+    port,
+    protocol,
+    auth: auth.required ? 'token' : 'local',
+    tls: Boolean(tls),
+  });
+
+  server.on('error', (error) => {
+    log('error', 'server.error', { error: error.message });
+  });
+
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log('info', 'server.shutdown', { signal });
+    const force = setTimeout(() => {
+      log('error', 'server.shutdown_timeout', {});
+      process.exit(1);
+    }, 10_000);
+    force.unref();
+    server.close((error) => {
+      clearTimeout(force);
+      if (error) {
+        log('error', 'server.close_failed', { error: error.message });
+        process.exit(1);
+      }
+      log('info', 'server.stopped', {});
+      process.exit(0);
+    });
+  };
+
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  return server;
+}
+
+const isMainModule = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return fileURLToPath(import.meta.url) === path.resolve(entry);
+  } catch {
+    return false;
+  }
+})();
+
+if (isMainModule) {
+  startServer().catch((error) => {
+    log('error', 'server.start_failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  });
+}

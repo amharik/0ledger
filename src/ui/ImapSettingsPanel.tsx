@@ -18,9 +18,8 @@ import {
 import { getDb } from '@/core/db/db';
 import {
   MAIL_PROVIDER_PRESETS,
-  decodePassword,
   deleteMailbox,
-  encodePassword,
+  getMailboxPassword,
   hydrateMailboxesFromDb,
   listMailboxes,
   saveMailbox,
@@ -157,7 +156,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     setNotice(undefined);
   }
 
-  function openEditForm(acc: MailboxAccount) {
+  async function openEditForm(acc: MailboxAccount) {
     setIsNew(false);
     setEditId(acc.id);
     setLabel(acc.label);
@@ -166,7 +165,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     setPort(acc.port);
     setTls(acc.tls ?? acc.port === 993);
     setUsername(acc.username);
-    setPassword(decodePassword(acc.passwordCipher, workspaceId));
+    setPassword((await getMailboxPassword(workspaceId, acc.id)) ?? '');
     setShowPassword(false);
     setMailboxFolder(acc.mailbox || 'INBOX');
     setAvailableFolders([]);
@@ -190,7 +189,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     setError(undefined);
     setNotice(undefined);
     try {
-      const res = await testMailConnectionDetailed(config);
+      const res = await testMailConnectionDetailed(config, workspaceId);
       if (targetKey === 'form' && res.folders.length > 0) {
         setAvailableFolders(res.folders);
       }
@@ -204,7 +203,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     }
   }
 
-  function handleSave(event: FormEvent) {
+  async function handleSave(event: FormEvent) {
     event.preventDefault();
     setError(undefined);
     setNotice(undefined);
@@ -228,7 +227,6 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
       port: Number(port) || 993,
       tls,
       username: username.trim(),
-      passwordCipher: encodePassword(password.trim(), workspaceId),
       mailbox: mailboxFolder.trim() || 'INBOX',
       isDefault: makeDefault || mailboxes.length === 0,
       defaultPreset,
@@ -239,7 +237,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     };
 
-    saveMailbox(workspaceId, nextAccount, password.trim(), getDb());
+    await saveMailbox(workspaceId, nextAccount, password.trim(), getDb());
     const refreshed = listMailboxes(workspaceId);
     setMailboxes(refreshed);
     setEditing(false);
@@ -259,13 +257,32 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     }
   }
 
-  function handleConfirmDelete(acc: MailboxAccount) {
-    deleteMailbox(workspaceId, acc.id, getDb());
+  async function handleConfirmDelete(acc: MailboxAccount) {
+    await deleteMailbox(workspaceId, acc.id, getDb());
     setMailboxes(listMailboxes(workspaceId));
     setConfirmDeleteId(null);
     const msg = `Removed mailbox "${acc.label}".`;
     setNotice(msg);
     onChanged?.(msg);
+  }
+
+  async function testSavedAccount(acc: MailboxAccount) {
+    const savedPassword = await getMailboxPassword(workspaceId, acc.id);
+    if (!savedPassword) {
+      setError('Enter this mailbox\'s app password in Edit before testing it.');
+      return;
+    }
+    await runConnectionTest(
+      {
+        host: acc.host,
+        port: acc.port,
+        tls: acc.tls ?? acc.port === 993,
+        username: acc.username,
+        password: savedPassword,
+        mailbox: acc.mailbox || 'INBOX',
+      },
+      acc.id,
+    );
   }
 
   return (
@@ -732,7 +749,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
                           <div className="inline-flex items-center justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => handleConfirmDelete(acc)}
+                              onClick={() => void handleConfirmDelete(acc)}
                               className="rounded-md bg-rose-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-700"
                             >
                               Remove
@@ -760,19 +777,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
                             <button
                               type="button"
                               disabled={isTesting}
-                              onClick={() =>
-                                void runConnectionTest(
-                                  {
-                                    host: acc.host,
-                                    port: acc.port,
-                                    tls: acc.tls ?? acc.port === 993,
-                                    username: acc.username,
-                                    password: decodePassword(acc.passwordCipher, workspaceId),
-                                    mailbox: acc.mailbox || 'INBOX',
-                                  },
-                                  acc.id,
-                                )
-                              }
+                              onClick={() => void testSavedAccount(acc)}
                               className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-indigo-600 disabled:opacity-50 dark:text-slate-400 dark:hover:text-indigo-400"
                             >
                               <Plug className="h-3.5 w-3.5" />
@@ -780,7 +785,7 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
                             </button>
                             <button
                               type="button"
-                              onClick={() => openEditForm(acc)}
+                              onClick={() => void openEditForm(acc)}
                               className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
                             >
                               <Pencil className="h-3.5 w-3.5" />

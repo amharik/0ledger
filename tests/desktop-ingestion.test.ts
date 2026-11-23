@@ -7,17 +7,16 @@ import {
   saveWatcherConfig,
 } from '@/core/desktop/folder-watcher';
 import {
-  getMailSyncConfig,
-  saveMailSyncConfig,
   listMailboxes,
   saveMailbox,
   deleteMailbox,
   getActiveMailbox,
-  encodePassword,
-  decodePassword,
+  getMailboxPassword,
+  clearMailSyncStorage,
   saveEmailAttachment,
   type MailboxAccount,
 } from '@/core/desktop/mail-sync';
+import { setServerTenantId } from '@/core/server/server-client';
 import { parseCsvStatement } from '@/core/ingest';
 import { stageImport } from '@/core/ingest';
 import { extractTransactionId, parseAlertText } from '@/core/ingest/email';
@@ -70,30 +69,33 @@ describe('Folder Watcher & Vault Configuration', () => {
 });
 
 describe('Mail Sync Configuration & Multi-Mailbox Manager', () => {
-  it('persists and retrieves IMAP mail sync settings', () => {
+  it('stores credentials outside mailbox metadata and retrieves them securely', async () => {
     const wsId = 'ws_test_mail';
-    expect(getMailSyncConfig(wsId)).toBeUndefined();
+    setServerTenantId('tenant-test');
+    clearMailSyncStorage(wsId);
 
-    saveMailSyncConfig(wsId, {
+    const mbx: MailboxAccount = {
+      id: 'mbx_default',
+      label: 'Accounts',
+      provider: 'gmail',
       host: 'imap.gmail.com',
       port: 993,
       username: 'accounts@mycompany.in',
-      password: 'abcd efgh ijkl mnop',
       mailbox: 'INBOX',
-    });
+      isDefault: true,
+    };
 
-    const config = getMailSyncConfig(wsId);
-    expect(config).toBeDefined();
-    expect(config?.username).toBe('accounts@mycompany.in');
-    expect(config?.host).toBe('imap.gmail.com');
+    await saveMailbox(wsId, mbx, 'abcd efgh ijkl mnop');
+    const list = listMailboxes(wsId);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.passwordCipher).toBeUndefined();
+    expect(await getMailboxPassword(wsId, mbx.id)).toBe('abcd efgh ijkl mnop');
   });
 
-  it('safely obfuscates passwords and manages multiple mailboxes', () => {
+  it('manages multiple mailboxes without storing passwords in metadata', async () => {
     const wsId = 'ws_multi_mailbox';
-    const plain = 'secret_app_pass_123';
-    const cipher = encodePassword(plain, wsId);
-    expect(cipher).not.toBe(plain);
-    expect(decodePassword(cipher, wsId)).toBe(plain);
+    setServerTenantId('tenant-test');
+    clearMailSyncStorage(wsId);
 
     const mbx1: MailboxAccount = {
       id: 'mbx_hdfc',
@@ -102,7 +104,6 @@ describe('Mail Sync Configuration & Multi-Mailbox Manager', () => {
       host: 'imap.gmail.com',
       port: 993,
       username: 'billing@acme.com',
-      passwordCipher: cipher,
       mailbox: 'INBOX',
       isDefault: true,
     };
@@ -114,24 +115,26 @@ describe('Mail Sync Configuration & Multi-Mailbox Manager', () => {
       host: 'outlook.office365.com',
       port: 993,
       username: 'founder@acme.in',
-      passwordCipher: encodePassword('toll_pass_456', wsId),
       mailbox: 'INBOX',
       isDefault: false,
     };
 
-    saveMailbox(wsId, mbx1);
-    saveMailbox(wsId, mbx2);
+    await saveMailbox(wsId, mbx1, 'secret_app_pass_123');
+    await saveMailbox(wsId, mbx2, 'toll_pass_456');
 
     const list = listMailboxes(wsId);
     expect(list.length).toBe(2);
     expect(getActiveMailbox(wsId)?.id).toBe('mbx_hdfc');
     expect(getActiveMailbox(wsId, 'mbx_fastag')?.username).toBe('founder@acme.in');
+    expect(await getMailboxPassword(wsId, 'mbx_hdfc')).toBe('secret_app_pass_123');
+    expect(await getMailboxPassword(wsId, 'mbx_fastag')).toBe('toll_pass_456');
 
-    deleteMailbox(wsId, 'mbx_hdfc');
+    await deleteMailbox(wsId, 'mbx_hdfc');
     const remaining = listMailboxes(wsId);
     expect(remaining.length).toBe(1);
     expect(remaining[0]!.id).toBe('mbx_fastag');
     expect(remaining[0]!.isDefault).toBe(true);
+    expect(await getMailboxPassword(wsId, 'mbx_hdfc')).toBeUndefined();
   });
 });
 

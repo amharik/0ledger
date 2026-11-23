@@ -6,8 +6,20 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "paths": {
-      "@/*": ["./src/*"]
-    }
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "allowImportingTsExtensions": true
   },
-  "include": ["src", "tests", "wxt.config.ts", "vitest.config.ts", ".wxt/wxt.d.ts"]
+  "include": [
+    "src",
+    "tests",
+    "wxt.config.ts",
+    "vitest.config.ts",
+    ".wxt/wxt.d.ts",
+    "server.ts",
+    "server.config.ts",
+    "scripts"
+  ]
 }

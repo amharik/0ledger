@@ -13,8 +13,7 @@ import {
 import { getDb } from '@/core/db/db';
 import {
   MAIL_PROVIDER_PRESETS,
-  decodePassword,
-  encodePassword,
+  getMailboxPassword,
   hydrateMailboxesFromDb,
   listMailboxes,
   listRecentMailHistory,
@@ -116,7 +115,7 @@ export function EmailImportPanel({
     const db = getDb();
     const [hydrated, recent] = await Promise.all([
       hydrateMailboxesFromDb(db, workspaceId),
-      listRecentMailHistory(db, 12),
+      listRecentMailHistory(db, workspaceId, 12),
     ]);
     setMailboxes(hydrated);
     setHistory(recent);
@@ -178,7 +177,7 @@ export function EmailImportPanel({
 
     setTesting(true);
     try {
-      const testRes = await testMailConnectionDetailed(config);
+      const testRes = await testMailConnectionDetailed(config, workspaceId);
       const providerName = MAIL_PROVIDER_PRESETS[quickProvider].label.split(' ')[0] ?? 'IMAP';
       const created: MailboxAccount = {
         id: `mbx_${Date.now()}`,
@@ -188,7 +187,6 @@ export function EmailImportPanel({
         port,
         tls: port === 993,
         username: quickEmail.trim(),
-        passwordCipher: encodePassword(quickPassword.trim(), workspaceId),
         mailbox: testRes.mailbox || 'INBOX',
         isDefault: true,
         defaultPreset: 'bank',
@@ -198,7 +196,7 @@ export function EmailImportPanel({
         createdAt: new Date().toISOString(),
       };
 
-      saveMailbox(workspaceId, created, quickPassword.trim(), getDb());
+      await saveMailbox(workspaceId, created, quickPassword.trim(), getDb());
       setQuickPassword('');
       await loadState();
       setSelectedId(created.id);
@@ -218,14 +216,18 @@ export function EmailImportPanel({
     setError(undefined);
     setStatusMessage(undefined);
     try {
+      const password = await getMailboxPassword(workspaceId, activeAccount.id);
+      if (!password) {
+        throw new Error('Enter this mailbox\'s app password in IMAP settings to test it.');
+      }
       const res = await testMailConnectionDetailed({
         host: activeAccount.host,
         port: activeAccount.port,
         tls: activeAccount.tls ?? activeAccount.port === 993,
         username: activeAccount.username,
-        password: decodePassword(activeAccount.passwordCipher, workspaceId),
+        password,
         mailbox: activeAccount.mailbox || 'INBOX',
-      });
+      }, workspaceId);
       const countPart =
         typeof res.exists === 'number' ? ` · ${res.exists.toLocaleString()} messages in ${res.mailbox}` : '';
       setStatusMessage(`Connected to ${activeAccount.host}${countPart}.`);
@@ -257,8 +259,8 @@ export function EmailImportPanel({
       const db = getDb();
       for (let i = 0; i < targets.length; i += 1) {
         const account = targets[i]!;
-        const plainPassword = decodePassword(account.passwordCipher, workspaceId);
-        if (!account.username.trim() || !plainPassword.trim()) {
+        const plainPassword = await getMailboxPassword(workspaceId, account.id);
+        if (!account.username.trim() || !plainPassword?.trim()) {
           combined.errors.push(`${account.label}: missing credentials. Update in IMAP settings.`);
           continue;
         }

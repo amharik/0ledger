@@ -1,15 +1,14 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, type LedgerDatabase } from '@/core/db/db';
 import { createWorkspace } from '@/core/db/workspace-service';
 import {
   listMailboxes,
   saveMailbox,
-  getMailSyncConfig,
-  saveMailSyncConfig,
+  getMailboxPassword,
   clearMailSyncStorage,
-  encodePassword,
   type MailboxAccount,
 } from '@/core/desktop/mail-sync';
+import { clearServerClientConfig, setServerTenantId } from '@/core/server/server-client';
 import {
   parseAuthenticationResults,
   computeTransactionDedupeKey,
@@ -34,50 +33,81 @@ afterEach(async () => {
     await db.delete();
     db.close();
   }
+  vi.unstubAllGlobals();
 });
+
+class MemoryStorage implements Storage {
+  private readonly data = new Map<string, string>();
+
+  get length(): number {
+    return this.data.size;
+  }
+
+  clear(): void {
+    this.data.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.data.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return [...this.data.keys()][index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.data.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.data.set(key, value);
+  }
+}
 
 describe('Security & Data Integrity Hardening (P0/P1 Review Findings)', () => {
   const workspaceId = 'ws_sec_test';
 
   beforeEach(() => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+    clearServerClientConfig();
+    setServerTenantId('tenant-a');
     clearMailSyncStorage(workspaceId);
   });
 
   describe('P0.1: Credential Storage & Zero Plaintext in LocalStorage', () => {
-    it('purges legacy plaintext storage upon migration and never mirrors plaintext', () => {
-      // Simulate an old legacy configuration with plaintext password
-      saveMailSyncConfig(workspaceId, {
-        host: 'imap.hdfcbank.net',
-        port: 993,
-        username: 'treasury@hdfc.com',
-        password: 'PlainTextSecretPassword!',
-        mailbox: 'INBOX',
-      });
+    it('purges legacy plaintext storage upon migration and never mirrors plaintext', async () => {
+      localStorage.setItem(
+        `0ledger.mail_sync.config:${workspaceId}`,
+        JSON.stringify({
+          host: 'imap.hdfcbank.net',
+          port: 993,
+          username: 'treasury@hdfc.com',
+          password: 'PlainTextSecretPassword!',
+          mailbox: 'INBOX',
+        }),
+      );
 
-      expect(getMailSyncConfig(workspaceId)?.password).toBe('PlainTextSecretPassword!');
-
-      // Migration must create mailbox account and WIPE legacy plaintext storage
       const mailboxes = listMailboxes(workspaceId);
-      expect(mailboxes.length).toBe(1);
+      expect(mailboxes).toHaveLength(1);
       expect(mailboxes[0]!.username).toBe('treasury@hdfc.com');
+      expect(mailboxes[0]!.passwordCipher).toBeUndefined();
+      expect(localStorage.getItem(`0ledger.mail_sync.config:${workspaceId}`)).toBeNull();
 
-      // The plaintext configuration must now be deleted from storage
-      expect(getMailSyncConfig(workspaceId)).toBeUndefined();
-
-      // Saving an account must NEVER resurrect legacy plaintext config
-      saveMailbox(workspaceId, {
+      await saveMailbox(workspaceId, {
         id: 'mbx_new',
         label: 'New Account',
         provider: 'custom',
         host: 'imap.example.com',
         port: 993,
         username: 'audit@example.com',
-        passwordCipher: encodePassword('another-pass', workspaceId),
         mailbox: 'INBOX',
         isDefault: true,
-      });
+      }, 'another-pass');
 
-      expect(getMailSyncConfig(workspaceId)).toBeUndefined();
+      const stored = localStorage.getItem(`0ledger.mailboxes:tenant-a:${workspaceId}`);
+      expect(stored).not.toContain('another-pass');
+      expect(stored).not.toContain('passwordCipher');
+      expect(await getMailboxPassword(workspaceId, 'mbx_new')).toBe('another-pass');
     });
   });
 

@@ -4,7 +4,8 @@
 
 | Boundary | Trusted | Untrusted |
 | --- | --- | --- |
-| Extension | Bundled code, local IndexedDB/OPFS | Imported email/PDF/CSV/XLSX/Tally files |
+| Desktop shell / local server | Bundled code, local SQLite/IndexedDB/OPFS, loopback API | Imported email/PDF/CSV/XLSX/Tally files, network IMAP hosts |
+| Authenticated API | Bearer token holder for a tenant/workspace set | Other tenants, unauthenticated callers, mismatched tenant headers |
 | Google Drive | OAuth token held locally | Files outside the 0ledger folder / `drive.file` grant |
 | Webmail capture | User-invoked page snapshot | Page DOM and pasted content |
 | Attachments | Local OPFS files | PDF parser input |
@@ -30,6 +31,16 @@ server-side rendering.
 - Dedupe checks prevent re-import from silently duplicating vouchers.
 - Scanned PDFs are flagged (`ScannedPdfError`) instead of being guessed from an image.
 - No secrets are logged. OAuth tokens and passwords must never appear in diagnostics.
+- Server API tokens are HMAC-SHA256 signed and scoped to a tenant plus explicit workspace ids; a
+  mismatched `X-Tenant-Id` or unlisted `X-Workspace-Id` is rejected. Production requires
+  `SERVER_AUTH_SECRET` (32+ characters), and non-loopback binds require a signing secret.
+- IMAP host validation rejects URLs and hosts resolving to private, loopback, link-local, or reserved
+  addresses unless `ALLOW_PRIVATE_IMAP=true` is explicitly set. DNS results are checked before connect.
+- `/api` is rate limited (`SERVER_RATE_LIMIT_PER_MINUTE`, default 60) and returns `Retry-After` on 429.
+- Optional TLS via `SERVER_TLS_CERT`/`SERVER_TLS_KEY`; HSTS and restrictive security headers are set.
+- Mailbox passwords are stored in the OS keyring (desktop) or memory only (browser session), scoped by
+  tenant/workspace/account. Legacy XOR ciphers are migrated and stripped from storage.
+- IMAP fetch is paginated (`limit` max 50, `cursor`/`nextCursor`) to bound memory and response size.
 
 ## Threat model
 
@@ -40,14 +51,20 @@ server-side rendering.
 - **Compromised Google account**: `drive.file` limits blast radius; mirrored Sheets remain plaintext.
 - **Accidental overwrite**: Drive writes require `appProperties.app = 0ledger`; external workbooks are
   never overwritten.
-- **Supply chain**: dependencies are pinned in `package-lock.json`; review new parsers before adding.
+- **Malicious IMAP host**: SSRF validation blocks private/reserved targets; use `ALLOW_PRIVATE_IMAP`
+  only for trusted internal servers. DNS rebinding remains a residual risk for any DNS-based allowlist.
+- **Stolen API token**: tokens are short-lived and workspace-scoped; rotate `SERVER_AUTH_SECRET` to
+  invalidate all outstanding tokens.
+- **Supply chain**: dependencies are pinned in `bun.lock` (authoritative); review new parsers before adding.
 
 ## Release checklist
 
-- [ ] `npm run compile`
-- [ ] `npm test -- --run`
-- [ ] `npm run build`
-- [ ] `npm run zip`
+- [ ] `bun run compile`
+- [ ] `bun run test`
+- [ ] `bun run test:stress`
+- [ ] `bun run build`
+- [ ] `cargo test --workspace`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] Inspect `.output/` for unexpected remote code or dev-only files
 - [ ] Confirm manifest permissions and host permissions are unchanged or justified
 - [ ] Confirm no credentials, tokens or real financial fixtures are tracked

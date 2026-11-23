@@ -10,6 +10,7 @@ import { newId, nowIso } from '@/core/ids';
 import { sha256Hex } from '@/core/util/hash';
 import { storeRawArtifact, processFinancialObservation } from '@/core/canonical/engine';
 import { getDefaultFolders } from './folder-watcher';
+import { getServerTenantId, serverHeaders } from '@/core/server/server-client';
 
 export type MailboxProvider = 'gmail' | 'outlook' | 'zoho' | 'yahoo' | 'custom';
 
@@ -29,7 +30,7 @@ export interface MailboxAccount {
   host: string;
   port: number;
   username: string;
-  passwordCipher: string; // obfuscated with workspace salt
+  passwordCipher?: string; // legacy migration only; never written for new accounts
   mailbox?: string;
   tls?: boolean;
   isDefault?: boolean;
@@ -48,6 +49,7 @@ export interface ImapQuery {
   custom_search?: string;
   limit?: number;
   days?: number;
+  cursor?: number;
 }
 
 export interface ImapMessageResult {
@@ -170,6 +172,7 @@ export const MAIL_PROVIDER_PRESETS: Record<
 const IMAP_CONFIG_KEY = '0ledger.mail_sync.config';
 const MAILBOXES_KEY = '0ledger.mailboxes';
 const memoryStore = new Map<string, string>();
+const sessionPasswords = new Map<string, string>();
 
 function getStorageItem(key: string): string | null {
   if (typeof localStorage !== 'undefined') {
@@ -193,20 +196,153 @@ function removeStorageItem(key: string): void {
   memoryStore.delete(key);
 }
 
+function credentialKey(workspaceId: string, accountId: string): string {
+  return `${getServerTenantId()}:${workspaceId}:${accountId}`;
+}
+
+function legacyCredentialKey(workspaceId: string, accountId: string): string {
+  return `${workspaceId}:${accountId}`;
+}
+
+function mailboxStoreKey(workspaceId: string): string {
+  return `${MAILBOXES_KEY}:${getServerTenantId()}:${workspaceId}`;
+}
+
+function legacyMailboxStoreKey(workspaceId: string): string {
+  return `${MAILBOXES_KEY}:${workspaceId}`;
+}
+
+function scopedLegacyConfigKey(workspaceId: string): string {
+  return `${IMAP_CONFIG_KEY}:${getServerTenantId()}:${workspaceId}`;
+}
+
+function unscopedLegacyConfigKey(workspaceId: string): string {
+  return `${IMAP_CONFIG_KEY}:${workspaceId}`;
+}
+
+function withoutPasswordCipher(account: MailboxAccount): MailboxAccount {
+  const { passwordCipher: _legacy, ...safe } = account;
+  return safe;
+}
+
+function decodeLegacyPassword(cipher: string, salt: string): string | undefined {
+  if (!cipher) return undefined;
+  try {
+    const decoded = atob(cipher);
+    const raw = Array.from(decoded)
+      .map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ salt.charCodeAt(i % salt.length)))
+      .join('');
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 export function clearMailSyncStorage(workspaceId?: string): void {
+  const tenant = getServerTenantId();
   if (workspaceId) {
     if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(`${MAILBOXES_KEY}:${workspaceId}`);
-      localStorage.removeItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+      localStorage.removeItem(mailboxStoreKey(workspaceId));
+      localStorage.removeItem(legacyMailboxStoreKey(workspaceId));
+      localStorage.removeItem(scopedLegacyConfigKey(workspaceId));
+      localStorage.removeItem(unscopedLegacyConfigKey(workspaceId));
     }
-    memoryStore.delete(`${MAILBOXES_KEY}:${workspaceId}`);
-    memoryStore.delete(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+    memoryStore.delete(mailboxStoreKey(workspaceId));
+    memoryStore.delete(legacyMailboxStoreKey(workspaceId));
+    memoryStore.delete(scopedLegacyConfigKey(workspaceId));
+    memoryStore.delete(unscopedLegacyConfigKey(workspaceId));
+    const prefix = `${tenant}:${workspaceId}:`;
+    for (const key of [...sessionPasswords.keys()]) {
+      if (key.startsWith(prefix)) sessionPasswords.delete(key);
+    }
   } else {
     if (typeof localStorage !== 'undefined') {
       localStorage.clear();
     }
     memoryStore.clear();
+    sessionPasswords.clear();
   }
+}
+
+export async function storeMailboxPassword(
+  workspaceId: string,
+  accountId: string,
+  password: string,
+): Promise<boolean> {
+  const key = credentialKey(workspaceId, accountId);
+  if (!password) {
+    sessionPasswords.delete(key);
+    await deleteNativePassword(key);
+    return false;
+  }
+  sessionPasswords.set(key, password);
+  return storeNativePassword(key, password);
+}
+
+export async function getMailboxPassword(
+  workspaceId: string,
+  accountId: string,
+): Promise<string | undefined> {
+  const key = credentialKey(workspaceId, accountId);
+  const native = await getNativePassword(key);
+  if (native) return native;
+
+  const legacyNative = await getNativePassword(legacyCredentialKey(workspaceId, accountId));
+  if (legacyNative) {
+    await storeMailboxPassword(workspaceId, accountId, legacyNative);
+    return legacyNative;
+  }
+
+  const session = sessionPasswords.get(key);
+  if (session) return session;
+
+  const account = listMailboxes(workspaceId).find((item) => item.id === accountId);
+  if (!account?.passwordCipher) return undefined;
+
+  const legacy = decodeLegacyPassword(account.passwordCipher, workspaceId);
+  if (!legacy) return undefined;
+  sessionPasswords.set(key, legacy);
+  await storeNativePassword(key, legacy);
+  await migrateMailboxCredentials(workspaceId);
+  return legacy;
+}
+
+export async function deleteMailboxPassword(
+  workspaceId: string,
+  accountId: string,
+): Promise<void> {
+  const key = credentialKey(workspaceId, accountId);
+  sessionPasswords.delete(key);
+  await deleteNativePassword(key);
+  await deleteNativePassword(legacyCredentialKey(workspaceId, accountId));
+}
+
+export async function migrateMailboxCredentials(
+  workspaceId: string,
+  db?: LedgerDatabase,
+): Promise<MailboxAccount[]> {
+  const list = listMailboxes(workspaceId);
+  let changed = false;
+
+  for (const account of list) {
+    if (!account.passwordCipher) continue;
+    const legacy = decodeLegacyPassword(account.passwordCipher, workspaceId);
+    if (legacy) {
+      await storeMailboxPassword(workspaceId, account.id, legacy);
+    }
+    changed = true;
+  }
+
+  const sanitized = list.map(withoutPasswordCipher);
+  if (changed) {
+    setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify(sanitized));
+    if (db) await persistMailboxesToDb(db, workspaceId, sanitized);
+  }
+  return sanitized;
 }
 
 // Native Keyring integration for desktop OS (Keychain / Secret Service / DPAPI)
@@ -253,51 +389,33 @@ export async function deleteNativePassword(accountKey: string): Promise<void> {
   }
 }
 
-// Safe password obfuscation/encryption fallback using workspace-derived XOR cipher
-export function encodePassword(password: string, salt = '0ledger-key'): string {
-  if (!password) return '';
-  try {
-    const s = salt || '0ledger-key';
-    const utf8 = encodeURIComponent(password);
-    const chars = Array.from(utf8).map((c, i) =>
-      String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)),
-    );
-    return btoa(chars.join(''));
-  } catch {
-    return password;
-  }
-}
-
-export function decodePassword(cipher: string, salt = '0ledger-key'): string {
-  if (!cipher) return '';
-  const s = salt || '0ledger-key';
-  try {
-    const decoded = atob(cipher);
-    const raw = Array.from(decoded)
-      .map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ s.charCodeAt(i % s.length)))
-      .join('');
-    try {
-      return decodeURIComponent(raw);
-    } catch {
-      return raw;
-    }
-  } catch {
-    return cipher;
-  }
-}
-
 export function listMailboxes(workspaceId: string): MailboxAccount[] {
   try {
-    const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
-    if (raw) return JSON.parse(raw);
+    const scoped = getStorageItem(mailboxStoreKey(workspaceId));
+    if (scoped) {
+      const parsed = JSON.parse(scoped) as unknown;
+      if (Array.isArray(parsed)) return parsed as MailboxAccount[];
+    }
+    const legacy = getStorageItem(legacyMailboxStoreKey(workspaceId));
+    if (legacy) {
+      setStorageItem(mailboxStoreKey(workspaceId), legacy);
+      removeStorageItem(legacyMailboxStoreKey(workspaceId));
+      const parsed = JSON.parse(legacy) as unknown;
+      if (Array.isArray(parsed)) return parsed as MailboxAccount[];
+    }
   } catch {}
 
-  // Fallback to single legacy config if present
   try {
-    const legacy = getMailSyncConfig(workspaceId);
-    if (legacy && legacy.username) {
+    const legacy = getLegacyMailSyncConfig(workspaceId);
+    if (legacy?.username) {
+      const id = 'mbx_default';
+      if (legacy.password) {
+        const key = credentialKey(workspaceId, id);
+        sessionPasswords.set(key, legacy.password);
+        void storeNativePassword(key, legacy.password);
+      }
       const initial: MailboxAccount = {
-        id: 'mbx_default',
+        id,
         label: `${legacy.username} (${legacy.host.includes('gmail') ? 'Gmail' : 'IMAP'})`,
         provider: legacy.host.includes('gmail')
           ? 'gmail'
@@ -311,15 +429,14 @@ export function listMailboxes(workspaceId: string): MailboxAccount[] {
         host: legacy.host,
         port: legacy.port,
         username: legacy.username,
-        passwordCipher: encodePassword(legacy.password, workspaceId),
         mailbox: legacy.mailbox || 'INBOX',
         tls: legacy.tls ?? legacy.port === 993,
         isDefault: true,
         createdAt: new Date().toISOString(),
       };
-      setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify([initial]));
-      // Wipe legacy config to remove plaintext password from localStorage and memoryStore
-      removeStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
+      setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify([initial]));
+      removeStorageItem(scopedLegacyConfigKey(workspaceId));
+      removeStorageItem(unscopedLegacyConfigKey(workspaceId));
       return [initial];
     }
   } catch {}
@@ -334,8 +451,8 @@ export async function persistMailboxesToDb(
 ): Promise<void> {
   try {
     await db.settings.put({
-      key: `${MAILBOXES_KEY}:${workspaceId}`,
-      value: list,
+      key: mailboxStoreKey(workspaceId),
+      value: list.map(withoutPasswordCipher),
     });
   } catch {
     // Non-fatal if IndexedDB is unavailable in unit tests
@@ -348,34 +465,39 @@ export async function hydrateMailboxesFromDb(
 ): Promise<MailboxAccount[]> {
   const local = listMailboxes(workspaceId);
   try {
-    const record = await db.settings.get(`${MAILBOXES_KEY}:${workspaceId}`);
+    const scopedRecord = await db.settings.get(mailboxStoreKey(workspaceId));
+    const legacyRecord = await db.settings.get(legacyMailboxStoreKey(workspaceId));
+    const record = scopedRecord ?? legacyRecord;
     const fromDb = Array.isArray(record?.value) ? (record.value as MailboxAccount[]) : [];
     if (fromDb.length > 0 && local.length === 0) {
-      setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(fromDb));
-      return fromDb;
+      setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify(fromDb));
+      return migrateMailboxCredentials(workspaceId, db);
     }
     if (local.length > 0 && fromDb.length === 0) {
       await persistMailboxesToDb(db, workspaceId, local);
     }
-    return local.length > 0 ? local : fromDb;
+    return migrateMailboxCredentials(workspaceId, db);
   } catch {
     return local;
   }
 }
 
-export function saveMailbox(
+export async function saveMailbox(
   workspaceId: string,
   account: MailboxAccount,
   rawPassword?: string,
   db?: LedgerDatabase,
-): void {
+): Promise<void> {
+  await migrateMailboxCredentials(workspaceId, db);
+
   let list: MailboxAccount[] = [];
   try {
-    const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
-    if (raw) list = JSON.parse(raw);
+    const raw = getStorageItem(mailboxStoreKey(workspaceId));
+    if (raw) list = JSON.parse(raw) as MailboxAccount[];
   } catch {}
+  list = list.map(withoutPasswordCipher);
 
-  const nextAccount = { ...account };
+  const nextAccount = withoutPasswordCipher(account);
   if (nextAccount.isDefault) {
     list = list.map((item) => ({ ...item, isDefault: item.id === nextAccount.id }));
   }
@@ -389,19 +511,17 @@ export function saveMailbox(
     }
     list.push(nextAccount);
   }
-  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify(list));
 
-  // Mirror to Dexie settings table when db is supplied so backups preserve IMAP accounts
-  if (db) {
-    void persistMailboxesToDb(db, workspaceId, list);
-  }
+  if (db) await persistMailboxesToDb(db, workspaceId, list);
+  removeStorageItem(scopedLegacyConfigKey(workspaceId));
+  removeStorageItem(unscopedLegacyConfigKey(workspaceId));
 
-  // Purge any residual legacy plaintext storage to prevent credential leaks
-  removeStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
-
-  // Store in native OS keyring if provided
   if (rawPassword) {
-    storeNativePassword(`${workspaceId}:${nextAccount.id}`, rawPassword).catch(() => {});
+    await storeMailboxPassword(workspaceId, nextAccount.id, rawPassword);
+  } else if (account.passwordCipher) {
+    const legacy = decodeLegacyPassword(account.passwordCipher, workspaceId);
+    if (legacy) await storeMailboxPassword(workspaceId, nextAccount.id, legacy);
   }
 }
 
@@ -410,11 +530,13 @@ export function setDefaultMailbox(
   id: string,
   db?: LedgerDatabase,
 ): MailboxAccount[] {
-  const list = listMailboxes(workspaceId).map((item) => ({
-    ...item,
-    isDefault: item.id === id,
-  }));
-  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  const list = listMailboxes(workspaceId)
+    .map(withoutPasswordCipher)
+    .map((item) => ({
+      ...item,
+      isDefault: item.id === id,
+    }));
+  setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify(list));
   if (db) {
     void persistMailboxesToDb(db, workspaceId, list);
   }
@@ -427,31 +549,35 @@ export function markMailboxSynced(
   db?: LedgerDatabase,
 ): MailboxAccount[] {
   const now = new Date().toISOString();
-  const list = listMailboxes(workspaceId).map((item) =>
-    item.id === id ? { ...item, lastSyncedAt: now } : item,
-  );
-  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  const list = listMailboxes(workspaceId)
+    .map(withoutPasswordCipher)
+    .map((item) => (item.id === id ? { ...item, lastSyncedAt: now } : item));
+  setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify(list));
   if (db) {
     void persistMailboxesToDb(db, workspaceId, list);
   }
   return list;
 }
 
-export function deleteMailbox(workspaceId: string, id: string, db?: LedgerDatabase): void {
+export async function deleteMailbox(
+  workspaceId: string,
+  id: string,
+  db?: LedgerDatabase,
+): Promise<void> {
   let list: MailboxAccount[] = [];
   try {
-    const raw = getStorageItem(`${MAILBOXES_KEY}:${workspaceId}`);
-    if (raw) list = JSON.parse(raw);
+    const raw = getStorageItem(mailboxStoreKey(workspaceId));
+    if (raw) list = JSON.parse(raw) as MailboxAccount[];
   } catch {}
-  list = list.filter((m) => m.id !== id);
+  list = list.filter((m) => m.id !== id).map(withoutPasswordCipher);
   if (list.length > 0 && !list.some((m) => m.isDefault)) {
     list[0]!.isDefault = true;
   }
-  setStorageItem(`${MAILBOXES_KEY}:${workspaceId}`, JSON.stringify(list));
+  setStorageItem(mailboxStoreKey(workspaceId), JSON.stringify(list));
   if (db) {
-    void persistMailboxesToDb(db, workspaceId, list);
+    await persistMailboxesToDb(db, workspaceId, list);
   }
-  deleteNativePassword(`${workspaceId}:${id}`).catch(() => {});
+  await deleteMailboxPassword(workspaceId, id);
 }
 
 export function getActiveMailbox(workspaceId: string, id?: string): MailboxAccount | undefined {
@@ -463,20 +589,23 @@ export function getActiveMailbox(workspaceId: string, id?: string): MailboxAccou
   return list.find((m) => m.isDefault) ?? list[0];
 }
 
-export function getMailSyncConfig(workspaceId: string): ImapConfig | undefined {
+function getLegacyMailSyncConfig(workspaceId: string): ImapConfig | undefined {
   try {
-    const raw = getStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`);
-    if (raw) return JSON.parse(raw);
+    const scoped = getStorageItem(scopedLegacyConfigKey(workspaceId));
+    if (scoped) return JSON.parse(scoped) as ImapConfig;
+    const legacy = getStorageItem(unscopedLegacyConfigKey(workspaceId));
+    if (legacy) {
+      setStorageItem(scopedLegacyConfigKey(workspaceId), legacy);
+      removeStorageItem(unscopedLegacyConfigKey(workspaceId));
+      return JSON.parse(legacy) as ImapConfig;
+    }
   } catch {}
   return undefined;
 }
 
-export function saveMailSyncConfig(workspaceId: string, config: ImapConfig): void {
-  setStorageItem(`${IMAP_CONFIG_KEY}:${workspaceId}`, JSON.stringify(config));
-}
-
 export async function testMailConnectionDetailed(
   config: ImapConfig,
+  workspaceId?: string,
 ): Promise<ImapConnectionTestResult> {
   if (isTauri()) {
     const ok = await invoke<boolean>('imap_test_connection', { config });
@@ -485,7 +614,7 @@ export async function testMailConnectionDetailed(
 
   const response = await fetch('/api/imap/test', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...serverHeaders(workspaceId) },
     body: JSON.stringify({ config }),
   });
 
@@ -509,44 +638,77 @@ export async function testMailConnectionDetailed(
   };
 }
 
-export async function testMailConnection(config: ImapConfig): Promise<boolean> {
-  const result = await testMailConnectionDetailed(config);
+export async function testMailConnection(
+  config: ImapConfig,
+  workspaceId?: string,
+): Promise<boolean> {
+  const result = await testMailConnectionDetailed(config, workspaceId);
   return result.ok;
 }
 
-export async function fetchMailMessages(
+export interface ImapMessagePage {
+  messages: ImapMessageResult[];
+  scanned: number;
+  matched: number;
+  nextCursor?: number;
+}
+
+export async function fetchMailPage(
   config: ImapConfig,
   query: ImapQuery,
-): Promise<ImapMessageResult[]> {
+  workspaceId?: string,
+  cursor?: number,
+): Promise<ImapMessagePage> {
   if (isTauri()) {
-    return await invoke<ImapMessageResult[]>('imap_fetch_messages', { config, query });
+    const messages = await invoke<ImapMessageResult[]>('imap_fetch_messages', { config, query });
+    return { messages, scanned: messages.length, matched: messages.length };
   }
 
   const response = await fetch('/api/imap/fetch', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config, query }),
+    headers: { 'Content-Type': 'application/json', ...serverHeaders(workspaceId) },
+    body: JSON.stringify({ config, query: { ...query, ...(cursor ? { cursor } : {}) } }),
   });
 
   const payload = (await response.json().catch(() => ({}))) as {
     ok?: boolean;
     error?: string;
     messages?: ImapMessageResult[];
+    scanned?: number;
+    matched?: number;
+    nextCursor?: number;
   };
 
   if (!response.ok || !payload.ok) {
     throw new Error(payload.error || `Failed to fetch emails from IMAP (HTTP ${response.status}).`);
   }
 
-  return Array.isArray(payload.messages) ? payload.messages : [];
+  const page: ImapMessagePage = {
+    messages: Array.isArray(payload.messages) ? payload.messages : [],
+    scanned: Number(payload.scanned ?? 0),
+    matched: Number(payload.matched ?? 0),
+  };
+  if (typeof payload.nextCursor === 'number') page.nextCursor = payload.nextCursor;
+  return page;
+}
+
+export async function fetchMailMessages(
+  config: ImapConfig,
+  query: ImapQuery,
+  workspaceId?: string,
+): Promise<ImapMessageResult[]> {
+  const page = await fetchMailPage(config, query, workspaceId);
+  return page.messages;
 }
 
 export async function listRecentMailHistory(
   db: LedgerDatabase,
+  workspaceId: string,
   limit = 20,
 ): Promise<MailSyncHistoryEntry[]> {
   try {
-    const rows = await db.syncState.where('key').startsWith('mail.uid:').toArray();
+    const prefix = `mail.uid:${getServerTenantId()}:${workspaceId}:`;
+    const rows = await db.syncState.where('key').startsWith(prefix).toArray();
     const parsed: MailSyncHistoryEntry[] = [];
     for (const row of rows) {
       try {
@@ -683,7 +845,7 @@ export async function syncLocalMail(
       message: `Connecting to ${config.host}:${config.port}...`,
     });
 
-    const messages = await fetchMailMessages(config, query);
+    const messages = await fetchMailMessages(config, query, workspaceId);
     report.fetched = messages.length;
 
     if (messages.length === 0) {
@@ -736,7 +898,7 @@ export async function syncLocalMail(
       try {
         const mailboxName = msg.mailbox || config.mailbox || 'INBOX';
         const uidValidity = msg.uid_validity ?? 0;
-        const syncKey = `mail.uid:${config.host}:${config.username}:${mailboxName}:${uidValidity}:${msg.uid}`;
+        const syncKey = `mail.uid:${getServerTenantId()}:${workspaceId}:${config.host}:${config.username}:${mailboxName}:${uidValidity}:${msg.uid}`;
         const legacyKey = `mail.uid:${config.host}:${config.username}:${msg.uid}`;
         const existing = (await db.syncState.get(syncKey)) ?? (await db.syncState.get(legacyKey));
         if (existing) {
