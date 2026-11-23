@@ -7,6 +7,7 @@ import {
   type PostedVoucher,
 } from '@/core/ledger';
 import { formatMinor, minorToDecimalString, parseAmountToMinor } from '@/core/money/money';
+import { verifyStatementBalance, type BalanceMismatch } from '@/core/ingest/balance';
 import { compact } from '@/core/util/objects';
 import type { Ledger, NewVoucher, VoucherType } from '@/core/model';
 
@@ -63,6 +64,7 @@ export function VoucherReview({ posted, ledgers, onClose, onSaved, onDeleted }: 
   const [draft, setDraft] = useState<Draft>(() => toDraft(posted));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [balanceWarning, setBalanceWarning] = useState<BalanceMismatch>();
 
   const { voucher } = posted;
   const editable =
@@ -77,6 +79,41 @@ export function VoucherReview({ posted, ledgers, onClose, onSaved, onDeleted }: 
   useEffect(() => {
     setDraft(toDraft(posted));
   }, [posted]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBalanceWarning(undefined);
+    const match = /^import:([^:]+):(.+)$/.exec(voucher.sourceRef ?? '');
+    if (!match) return;
+    const [, batchId, lineId] = match;
+    if (!batchId || !lineId) return;
+    void (async () => {
+      const db = getDb();
+      const line = await db.statementLines.get(lineId);
+      if (!line || line.importBatchId !== batchId) return;
+      const [lines, batch] = await Promise.all([
+        db.statementLines.where('importBatchId').equals(batchId).toArray(),
+        db.importBatches.get(batchId),
+      ]);
+      const assertion = verifyStatementBalance(lines, {
+        ...(batch?.openingBalanceMinor === undefined
+          ? {}
+          : { openingBalanceMinor: batch.openingBalanceMinor }),
+        ...(batch?.closingBalanceMinor === undefined
+          ? {}
+          : { closingBalanceMinor: batch.closingBalanceMinor }),
+      });
+      const mismatch =
+        assertion.mismatches.find((item) => item.lineNo === line.lineNo) ??
+        assertion.mismatches.find((item) => item.kind === 'closing');
+      if (!cancelled) setBalanceWarning(mismatch);
+    })().catch(() => {
+      if (!cancelled) setBalanceWarning(undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [voucher.id, voucher.sourceRef]);
 
   const totals = useMemo(() => {
     let debit = 0;
@@ -235,6 +272,16 @@ export function VoucherReview({ posted, ledgers, onClose, onSaved, onDeleted }: 
       </p>
 
       {error ? <div className="alert danger">{error}</div> : null}
+      {balanceWarning ? (
+        <div className="alert danger">
+          Statement balance mismatch at row {balanceWarning.lineNo}
+          {balanceWarning.page ? ` (page ${balanceWarning.page})` : ''}: expected{' '}
+          {formatMinor(balanceWarning.expectedMinor)}, actual{' '}
+          {formatMinor(balanceWarning.actualMinor)}, difference{' '}
+          {formatMinor(balanceWarning.differenceMinor)}. Verify this voucher against the source
+          statement before saving.
+        </div>
+      ) : null}
       {!editable ? (
         <div className="alert">
           {voucher.status !== 'regular'

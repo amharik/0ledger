@@ -27,6 +27,7 @@ import { parseCsvStatement, parsePdfStatement, parseTextStatement, parseXlsxStat
 import { parseEmailStatements } from './email';
 import { resolveLedgerForAccount } from './accounts';
 import type { IngestFileInput, ParsedStatement, ParsedStatementRow } from './types';
+export { verifyStatementBalance, type BalanceAssertion, type BalanceMismatch } from './balance';
 
 export interface StageImportInput {
   workspaceId: string;
@@ -126,6 +127,7 @@ export async function stageImport(
           debitMinor: row.debitMinor,
           creditMinor: row.creditMinor,
           balanceMinor: row.balanceMinor,
+          page: row.page,
           currency: row.currency,
           raw: sanitizeRaw(row.raw),
           matchStatus: 'unmatched',
@@ -149,6 +151,8 @@ export async function stageImport(
       adapterVersion: '1',
       status: 'staged',
       totalLines: lines.length,
+      openingBalanceMinor: input.statement.openingBalanceMinor,
+      closingBalanceMinor: input.statement.closingBalanceMinor,
       committedLines: 0,
       failedLines: 0,
       createdAt: now,
@@ -265,66 +269,6 @@ export async function ingestFile(
     );
   }
   return results;
-}
-
-export interface BalanceMismatch {
-  lineNo: number;
-  date: string;
-  description: string;
-  expectedMinor: number;
-  actualMinor: number;
-  differenceMinor: number;
-}
-
-export interface BalanceAssertion {
-  checked: number;
-  openingMinor?: number;
-  closingMinor?: number;
-  mismatches: BalanceMismatch[];
-}
-
-export function verifyStatementBalance(lines: StatementLine[]): BalanceAssertion {
-  // Sort chronologically by date ascending; if dates match, preserve lineNo order
-  const ordered = [...lines].sort((a, b) => {
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-    return a.lineNo - b.lineNo;
-  });
-  let previousBalance: number | undefined;
-  let openingMinor: number | undefined;
-  let closingMinor: number | undefined;
-  let checked = 0;
-  const mismatches: BalanceMismatch[] = [];
-
-  for (const line of ordered) {
-    if (line.balanceMinor === undefined) continue;
-    if (previousBalance === undefined) {
-      previousBalance = line.balanceMinor;
-      openingMinor = line.balanceMinor;
-      closingMinor = line.balanceMinor;
-      continue;
-    }
-    const expectedMinor = previousBalance + line.creditMinor - line.debitMinor;
-    checked += 1;
-    if (expectedMinor !== line.balanceMinor) {
-      mismatches.push({
-        lineNo: line.lineNo,
-        date: line.date,
-        description: line.description,
-        expectedMinor,
-        actualMinor: line.balanceMinor,
-        differenceMinor: line.balanceMinor - expectedMinor,
-      });
-    }
-    previousBalance = line.balanceMinor;
-    closingMinor = line.balanceMinor;
-  }
-
-  return {
-    checked,
-    ...(openingMinor === undefined ? {} : { openingMinor }),
-    ...(closingMinor === undefined ? {} : { closingMinor }),
-    mismatches,
-  };
 }
 
 export interface CommitImportOptions {

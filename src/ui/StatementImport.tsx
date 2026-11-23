@@ -60,6 +60,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
   const [activeBatchId, setActiveBatchId] = useState<string>();
   const [rows, setRows] = useState<StatementLine[]>([]);
   const [confirmAction, setConfirmAction] = useState<'discard' | 'undo' | null>(null);
+  const [acknowledgeMismatch, setAcknowledgeMismatch] = useState(false);
 
   const activeBatch = batches.find((batch) => batch.id === activeBatchId);
 
@@ -89,6 +90,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
 
   useEffect(() => {
     setConfirmAction(null);
+    setAcknowledgeMismatch(false);
     if (!activeBatchId) {
       setRows([]);
       return;
@@ -167,6 +169,10 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
 
   async function sendToInbox() {
     if (!activeBatch) return;
+    if (balanceCheck && balanceCheck.mismatches.length > 0 && !acknowledgeMismatch) {
+      setError('Review and acknowledge the balance mismatch before sending this batch to the Inbox.');
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -183,6 +189,10 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
 
   async function commit() {
     if (!activeBatchId || !accountId || !defaultLedgerId) return;
+    if (balanceCheck && balanceCheck.mismatches.length > 0 && !acknowledgeMismatch) {
+      setError('Review and acknowledge the balance mismatch before posting this batch.');
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -229,7 +239,16 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     }
   }
 
-  const balanceCheck = activeBatch ? verifyStatementBalance(rows) : undefined;
+  const balanceCheck = activeBatch
+    ? verifyStatementBalance(rows, {
+        ...(activeBatch.openingBalanceMinor === undefined
+          ? {}
+          : { openingBalanceMinor: activeBatch.openingBalanceMinor }),
+        ...(activeBatch.closingBalanceMinor === undefined
+          ? {}
+          : { closingBalanceMinor: activeBatch.closingBalanceMinor }),
+      })
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -364,13 +383,13 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
               </p>
             </div>
 
-            {balanceCheck && balanceCheck.checked > 0 ? (
+            {balanceCheck && (balanceCheck.checked > 0 || balanceCheck.expectedClosingMinor !== undefined) ? (
               <div className="flex items-center gap-1.5 text-xs">
                 {balanceCheck.mismatches.length === 0 ? (
                   <>
                     <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                     <span className="text-emerald-700 dark:text-emerald-400">
-                      Running balance verified ({balanceCheck.checked} lines)
+                      Running balance verified ({balanceCheck.checked} checks)
                     </span>
                   </>
                 ) : (
@@ -382,6 +401,43 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
               </div>
             ) : null}
           </div>
+
+          {balanceCheck && balanceCheck.mismatches.length > 0 ? (
+            <div className="border-b border-red-200 bg-red-50 px-6 py-4 text-xs dark:border-red-900/50 dark:bg-red-950/30">
+              <p className="font-semibold text-red-800 dark:text-red-300">
+                Balance check failed. Review the exact rows before posting.
+              </p>
+              <ul className="mt-2 space-y-1 text-red-700 dark:text-red-300">
+                {balanceCheck.mismatches.map((mismatch) => (
+                  <li key={`${mismatch.kind}-${mismatch.lineNo}`}>
+                    Row {mismatch.lineNo}
+                    {mismatch.page ? ` · page ${mismatch.page}` : ''}
+                    {` · ${mismatch.date} · ${mismatch.description}`}
+                    {` · expected ${formatMinor(mismatch.expectedMinor)}`}
+                    {` · actual ${formatMinor(mismatch.actualMinor)}`}
+                    {` · difference ${formatMinor(mismatch.differenceMinor)}`}
+                  </li>
+                ))}
+              </ul>
+              {balanceCheck.expectedClosingMinor !== undefined && balanceCheck.closingMinor !== undefined ? (
+                <p className="mt-2 text-red-700 dark:text-red-300">
+                  Opening {balanceCheck.openingMinor !== undefined ? formatMinor(balanceCheck.openingMinor) : '—'} +
+                  credits {formatMinor(balanceCheck.totalCreditsMinor)} − debits{' '}
+                  {formatMinor(balanceCheck.totalDebitsMinor)} ={' '}
+                  {formatMinor(balanceCheck.expectedClosingMinor)}; statement closing is{' '}
+                  {formatMinor(balanceCheck.closingMinor)}.
+                </p>
+              ) : null}
+              <label className="mt-3 flex items-center gap-2 font-medium text-red-800 dark:text-red-300">
+                <input
+                  type="checkbox"
+                  checked={acknowledgeMismatch}
+                  onChange={(event) => setAcknowledgeMismatch(event.target.checked)}
+                />
+                I reviewed this mismatch and want to proceed anyway.
+              </label>
+            </div>
+          ) : null}
 
           <div className="max-h-80 overflow-auto">
             <table className="w-full border-collapse text-left text-sm">
@@ -456,7 +512,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
                   <>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || (balanceCheck?.mismatches.length ?? 0) > 0 && !acknowledgeMismatch}
                       onClick={() => void sendToInbox()}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500"
                     >
@@ -465,7 +521,12 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
                     </button>
                     <button
                       type="button"
-                      disabled={busy || !accountId || !defaultLedgerId}
+                      disabled={
+                        busy ||
+                        !accountId ||
+                        !defaultLedgerId ||
+                        ((balanceCheck?.mismatches.length ?? 0) > 0 && !acknowledgeMismatch)
+                      }
                       onClick={() => void commit()}
                       className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                     >

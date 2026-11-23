@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,6 +56,11 @@ pub struct SaveEmailFileRequest {
     pub period_month: String,
     pub subfolder: String,
     pub file_name: String,
+    pub bytes_base64: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PdfMarkdownRequest {
     pub bytes_base64: String,
 }
 
@@ -190,7 +196,7 @@ pub fn scan_inbox_folder_impl(folder_path: &str) -> Result<Vec<DiscoveredFile>, 
     }
 
     // Sort newest first
-    files.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    files.sort_by_key(|a| std::cmp::Reverse(a.modified_ms));
     Ok(files)
 }
 
@@ -281,6 +287,117 @@ pub fn organize_accounting_file_impl(req: OrganizeRequest) -> Result<String, Str
     }
 
     Ok(dest.to_string_lossy().to_string())
+}
+
+pub fn extract_pdf_markdown_impl(req: PdfMarkdownRequest) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.bytes_base64)
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+    match anydoc::to_markdown_bytes(&bytes, Some(anydoc::Format::Pdf)) {
+        Ok(markdown) => Ok(markdown),
+        Err(anydoc::ConvertError::Encrypted) => Err("PDF is encrypted; provide a password".to_string()),
+        Err(anydoc::ConvertError::NeedsOcr { pages, page_count }) => Err(format!(
+            "PDF pages {:?} of {} need OCR",
+            pages, page_count
+        )),
+        Err(error) => Err(format!("PDF parse error: {}", error)),
+    }
+}
+
+fn docling_candidates() -> Vec<(String, bool)> {
+    let mut candidates = Vec::new();
+    if let Ok(bin) = std::env::var("DOCLING_BIN") {
+        let bin = bin.trim();
+        if !bin.is_empty() {
+            candidates.push((bin.to_string(), false));
+        }
+    }
+    candidates.push(("docling".to_string(), false));
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push((format!("{home}/.local/bin/docling"), false));
+    }
+    candidates.push(("/usr/local/bin/docling".to_string(), false));
+    candidates.push(("/usr/bin/docling".to_string(), false));
+    candidates.push(("python3".to_string(), true));
+    candidates.push(("python".to_string(), true));
+    candidates
+}
+
+fn find_markdown_file(root: &Path) -> Option<PathBuf> {
+    WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+}
+
+pub fn ocr_pdf_with_docling_impl(req: PdfMarkdownRequest) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.bytes_base64)
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("0ledger_docling_{}_{}", std::process::id(), stamp));
+    let output_dir = temp_dir.join("out");
+    fs::create_dir_all(&output_dir).map_err(|e| format!("Could not create docling temp dir: {}", e))?;
+    let pdf_path = temp_dir.join("statement.pdf");
+    fs::write(&pdf_path, &bytes).map_err(|e| format!("Could not write PDF for docling: {}", e))?;
+
+    let result = (|| {
+        let mut errors = Vec::new();
+        for (program, python_module) in docling_candidates() {
+            let mut command = Command::new(&program);
+            if python_module {
+                command.arg("-m").arg("docling");
+            }
+            command
+                .arg("convert")
+                .arg(&pdf_path)
+                .arg("--from")
+                .arg("pdf")
+                .arg("--to")
+                .arg("md")
+                .arg("--output")
+                .arg(&output_dir)
+                .arg("--ocr");
+            match command.output() {
+                Ok(output) if output.status.success() => {
+                    if let Some(markdown_path) = find_markdown_file(&output_dir) {
+                        return fs::read_to_string(&markdown_path)
+                            .map_err(|e| format!("Could not read docling Markdown: {}", e));
+                    }
+                    errors.push(format!("{} produced no Markdown file", program));
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let detail = if stderr.trim().is_empty() { stdout } else { stderr };
+                    errors.push(format!(
+                        "{} failed ({}): {}",
+                        program,
+                        output.status,
+                        detail.trim().chars().take(1000).collect::<String>()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    errors.push(format!("{} not found", program));
+                }
+                Err(error) => {
+                    errors.push(format!("{} could not run: {}", program, error));
+                }
+            }
+        }
+        Err(format!(
+            "Docling OCR is not available. Install it with `pip install docling` or set DOCLING_BIN. {}",
+            errors.join(" | ")
+        ))
+    })();
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    result
 }
 
 pub fn save_email_file_impl(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String> {
@@ -749,6 +866,18 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_extract_pdf_markdown() {
+        let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
+        let req = PdfMarkdownRequest {
+            bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        };
+        let markdown = extract_pdf_markdown_impl(req).unwrap();
+        assert!(markdown.contains("2026-10-01"));
+        assert!(markdown.contains("UPI PAYMENT"));
+        assert!(markdown.contains("SALARY CREDIT"));
     }
 
     #[test]

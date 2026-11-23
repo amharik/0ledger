@@ -17,6 +17,7 @@ export interface ParsedStatementRow {
   debitMinor: number;
   creditMinor: number;
   balanceMinor?: number;
+  page?: number;
   currency: string;
   raw: Record<string, unknown>;
 }
@@ -27,6 +28,8 @@ export interface ParsedStatement {
   kind: StatementKind;
   currency: string;
   rows: ParsedStatementRow[];
+  openingBalanceMinor?: number;
+  closingBalanceMinor?: number;
   sourceText?: string;
 }
 

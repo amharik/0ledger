@@ -3,6 +3,7 @@ import {
   detectStatementAdapter,
   parseCsvStatement,
   parseEmailStatements,
+  parseMarkdownStatement,
   parseStatementAmount,
   parseStatementDate,
   parseTextStatement,
@@ -55,6 +56,102 @@ describe('statement parsing', () => {
     });
   });
 
+  it('parses Rust anydoc Markdown tables with Out/In columns and skips B/F', () => {
+    const markdown = `# HDFC Bank Statement
+
+| Date | Description | Out | In | Balance | Status |
+| --- | --- | --- | --- | --- | --- |
+| 2026-10-01 | B/F |  |  | 12,345.67 | Success |
+| 2026-10-02 | UPI PAYMENT | 100.00 |  | 12,245.67 | Success |
+| 2026-10-03 | SALARY CREDIT |  | 5,000.00 | 17,245.67 | Success |
+`;
+    const statement = parseMarkdownStatement(markdown);
+    expect(statement.adapterId).toBe('hdfc');
+    expect(statement.rows).toHaveLength(2);
+    expect(statement.rows[0]).toMatchObject({
+      date: '2026-10-02',
+      description: 'UPI PAYMENT',
+      debitMinor: 10_000,
+      creditMinor: 0,
+      balanceMinor: 1_224_567,
+    });
+    expect(statement.rows[1]).toMatchObject({
+      date: '2026-10-03',
+      description: 'SALARY CREDIT',
+      debitMinor: 0,
+      creditMinor: 500_000,
+    });
+  });
+
+  it('parses anydoc plain-text output with inline date rows', () => {
+    const markdown =
+      'HDFC Bank Statement Date Description Out In Balance Status ' +
+      '2026-10-01 B/F 12,345.67 Success ' +
+      '2026-10-02 UPI PAYMENT 100.00 12,245.67 Success ' +
+      '2026-10-03 SALARY CREDIT 5,000.00 17,245.67 Success';
+    const statement = parseMarkdownStatement(markdown);
+    expect(statement.rows).toHaveLength(2);
+    expect(statement.rows[0]).toMatchObject({
+      date: '2026-10-02',
+      description: 'UPI PAYMENT',
+      debitMinor: 10_000,
+      creditMinor: 0,
+      balanceMinor: 1_224_567,
+    });
+    expect(statement.rows[1]).toMatchObject({
+      date: '2026-10-03',
+      debitMinor: 0,
+      creditMinor: 500_000,
+    });
+  });
+
+  it('reconstructs multiline rows, page numbers, and plain-integer amounts', () => {
+    const text = `HDFC Bank Statement
+Opening Balance 12,345.67
+Date Narration Withdrawal Amt Deposit Amt Closing Balance
+01/04/2026 UPI/PAYMENT/123
+  TO VENDOR
+  100
+  12,245.67
+02/04/2026 SALARY
+  CREDIT
+  5000
+  17,245.67
+\f
+03/04/2026 CARD
+  PURCHASE
+  250
+  16,995.67
+Closing Balance 16,995.67`;
+    const statement = parseTextStatement(text);
+    expect(statement.openingBalanceMinor).toBe(1_234_567);
+    expect(statement.closingBalanceMinor).toBe(1_699_567);
+    expect(statement.rows).toHaveLength(3);
+    expect(statement.rows[0]).toMatchObject({
+      date: '2026-04-01',
+      description: 'UPI/PAYMENT/123 TO VENDOR',
+      debitMinor: 10_000,
+      creditMinor: 0,
+      balanceMinor: 1_224_567,
+      page: 1,
+    });
+    expect(statement.rows[1]).toMatchObject({
+      date: '2026-04-02',
+      description: 'SALARY CREDIT',
+      debitMinor: 0,
+      creditMinor: 500_000,
+      page: 1,
+    });
+    expect(statement.rows[2]).toMatchObject({
+      date: '2026-04-03',
+      description: 'CARD PURCHASE',
+      debitMinor: 25_000,
+      creditMinor: 0,
+      balanceMinor: 1_699_567,
+      page: 2,
+    });
+  });
+
   it('parses an XLSX statement', async () => {
     const ExcelJS = await import('exceljs');
     const workbook = new ExcelJS.Workbook();
@@ -67,6 +164,35 @@ describe('statement parsing', () => {
     const statement = await parseXlsxStatement(bytes, { fileName: 'hdfc.xlsx' });
     expect(statement.rows).toHaveLength(1);
     expect(statement.rows[0]).toMatchObject({ debitMinor: 25_050, description: 'CARD PAYMENT' });
+  });
+
+  it('skips balance-forward PDF rows that have no debit or credit', () => {
+    const statement = parseTextStatement(`Date Description Out In Status
+2026-10-01 B/F 12,345.67 Cr
+2026-10-01 OPENING BALANCE 12,345.67
+2026-10-02 UPI PAYMENT 100.00 12,245.67`);
+    expect(statement.rows).toHaveLength(1);
+    expect(statement.rows[0]).toMatchObject({
+      date: '2026-10-02',
+      description: 'UPI PAYMENT',
+      debitMinor: 10_000,
+      creditMinor: 0,
+    });
+  });
+
+  it('skips balance-forward rows even when FASTag markers are present', () => {
+    const statement = parseTextStatement(`FASTag statement
+Date Description Out In Status
+2026-10-01 B/F 12,345.67
+2026-10-02 TOLL PLAZA 100.00 12,245.67`);
+    expect(statement.kind).toBe('fastag');
+    expect(statement.rows).toHaveLength(1);
+    expect(statement.rows[0]).toMatchObject({
+      date: '2026-10-02',
+      description: 'TOLL PLAZA',
+      debitMinor: 10_000,
+      creditMinor: 0,
+    });
   });
 
   it('parses a FASTag text statement', () => {

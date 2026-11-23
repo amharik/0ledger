@@ -39,6 +39,20 @@ fn save_email_file(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String
 }
 
 #[tauri::command]
+async fn extract_pdf_markdown(req: PdfMarkdownRequest) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || extract_pdf_markdown_impl(req))
+        .await
+        .map_err(|e| format!("PDF parse task error: {}", e))?
+}
+
+#[tauri::command]
+async fn ocr_pdf_with_docling(req: PdfMarkdownRequest) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || ocr_pdf_with_docling_impl(req))
+        .await
+        .map_err(|e| format!("Docling OCR task error: {}", e))?
+}
+
+#[tauri::command]
 async fn imap_test_connection(config: ImapConfig) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         imap_test_connection_impl(config)
@@ -102,6 +116,8 @@ fn main() {
             organize_accounting_file,
             save_email_eml,
             save_email_file,
+            extract_pdf_markdown,
+            ocr_pdf_with_docling,
             imap_test_connection,
             imap_fetch_messages,
             keyring_store_credential,
