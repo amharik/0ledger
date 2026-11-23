@@ -15,6 +15,8 @@ export type IdPrefix =
   | 'ccl'
   | 'tax'
   | 'att'
+  | 'eml'
+  | 'eaf'
   | 'num'
   | 'aud'
   | 'imp'

@@ -20,10 +20,12 @@ import {
   MAIL_PROVIDER_PRESETS,
   deleteMailbox,
   getMailboxPassword,
+  getStatementPassword,
   hydrateMailboxesFromDb,
   listMailboxes,
   saveMailbox,
   setDefaultMailbox,
+  storeStatementPassword,
   testMailConnectionDetailed,
   type ImapConfig,
   type MailPreset,
@@ -80,6 +82,8 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [statementPassword, setStatementPassword] = useState('');
+  const [showStatementPassword, setShowStatementPassword] = useState(false);
   const [mailboxFolder, setMailboxFolder] = useState('INBOX');
   const [availableFolders, setAvailableFolders] = useState<string[]>([]);
   const [defaultPreset, setDefaultPreset] = useState<MailPreset>('bank');
@@ -143,6 +147,8 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     setUsername('');
     setPassword('');
     setShowPassword(false);
+    setStatementPassword('');
+    setShowStatementPassword(false);
     setMailboxFolder('INBOX');
     setAvailableFolders([]);
     setDefaultPreset('bank');
@@ -167,11 +173,13 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
     setUsername(acc.username);
     setPassword((await getMailboxPassword(workspaceId, acc.id)) ?? '');
     setShowPassword(false);
+    setStatementPassword((await getStatementPassword(workspaceId, acc.id)) ?? '');
+    setShowStatementPassword(false);
     setMailboxFolder(acc.mailbox || 'INBOX');
     setAvailableFolders([]);
     setDefaultPreset(acc.defaultPreset ?? 'bank');
     setDefaultDays(acc.defaultDays ?? 60);
-    setDefaultLimit(acc.defaultLimit ?? 25);
+    setDefaultLimit(Math.min(acc.defaultLimit ?? 25, 50));
     setDefaultBankLedgerId(acc.defaultBankLedgerId ?? '');
     setMakeDefault(Boolean(acc.isDefault));
     setShowServerDetails(acc.provider === 'custom');
@@ -231,13 +239,14 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
       isDefault: makeDefault || mailboxes.length === 0,
       defaultPreset,
       defaultDays,
-      defaultLimit,
+      defaultLimit: Math.min(defaultLimit, 50),
       ...(defaultBankLedgerId ? { defaultBankLedgerId } : {}),
       ...(existing?.lastSyncedAt ? { lastSyncedAt: existing.lastSyncedAt } : {}),
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     };
 
     await saveMailbox(workspaceId, nextAccount, password.trim(), getDb());
+    await storeStatementPassword(workspaceId, nextAccount.id, statementPassword.trim());
     const refreshed = listMailboxes(workspaceId);
     setMailboxes(refreshed);
     setEditing(false);
@@ -344,8 +353,8 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
                 {isNew ? 'Connect IMAP mailbox' : `Edit ${label || username}`}
               </h3>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Credentials are stored locally in this workspace and included in encrypted `.0ledger`
-                backups.
+                Passwords are stored in your OS keyring (desktop) or this browser session only. Mailbox
+                settings and filters sync with your local workspace.
               </p>
             </div>
           </div>
@@ -427,6 +436,32 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+            </label>
+
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Statement PDF password (optional)
+              </span>
+              <div className="relative">
+                <input
+                  type={showStatementPassword ? 'text' : 'password'}
+                  value={statementPassword}
+                  onChange={(event) => setStatementPassword(event.target.value)}
+                  placeholder="Password for bank statement PDFs"
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowStatementPassword((v) => !v)}
+                  aria-label={showStatementPassword ? 'Hide statement password' : 'Show statement password'}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  {showStatementPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                Stored in your OS keyring and used only for encrypted PDF attachments.
+              </span>
             </label>
 
             <label className="block">
@@ -566,7 +601,6 @@ export function ImapSettingsPanel({ workspaceId, ledgers, onChanged, onOpenImpor
                   <option value={10}>10 emails</option>
                   <option value={25}>25 emails</option>
                   <option value={50}>50 emails</option>
-                  <option value={100}>100 emails</option>
                 </select>
               </label>
 

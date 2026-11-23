@@ -3,6 +3,7 @@ import {
   Check,
   CheckCircle2,
   FileUp,
+  Mail,
   RotateCcw,
   Search,
   Sparkles,
@@ -26,6 +27,7 @@ import { parseAlertText } from '@/core/ingest/email';
 import { MAX_INGEST_BYTES } from '@/core/ingest/limits';
 import { formatMinor } from '@/core/money/money';
 import type { Ledger, MoneyEvent } from '@/core/model';
+import { SourceEmailPreview } from './SourceEmailPreview';
 
 interface Props {
   workspaceId: string;
@@ -38,6 +40,13 @@ type RiskFilter = 'all' | 'high' | 'medium' | 'low';
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function formatEmailTime(occurredAt?: string): string {
+  if (!occurredAt) return '';
+  const date = new Date(occurredAt);
+  if (Number.isNaN(date.getTime())) return '';
+  return ` ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 function riskTextColor(band: 'low' | 'medium' | 'high'): string {
@@ -69,6 +78,7 @@ export function MoneyInbox({ workspaceId, ledgers, refreshToken, onChanged }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [confirmReverseId, setConfirmReverseId] = useState<string>();
+  const [previewEvent, setPreviewEvent] = useState<MoneyEvent>();
 
   // Ingest drawer/panel state
   const [showIngest, setShowIngest] = useState(false);
@@ -537,6 +547,7 @@ ${monthPrefix}-17,FASTag Toll Plaza Electronic City Bangalore,350.00,,142300.00`
                       </span>
                       <span className="num-tabular text-xs text-slate-500 dark:text-slate-400">
                         {item.event.date}
+                        {formatEmailTime(item.event.occurredAt)}
                       </span>
                       <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
                         ·
@@ -583,6 +594,18 @@ ${monthPrefix}-17,FASTag Toll Plaza Electronic City Bangalore,350.00,,142300.00`
                       ))}
                     </select>
 
+                    {item.event.emailArchiveId || item.event.attachmentId ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setPreviewEvent(item.event)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                        Source
+                      </button>
+                    ) : null}
+
                     <button
                       type="button"
                       disabled={busy || !bankLedgerId || !ledgerByEvent[item.event.id]}
@@ -626,6 +649,7 @@ ${monthPrefix}-17,FASTag Toll Plaza Electronic City Bangalore,350.00,,142300.00`
                 <div className="min-w-0 flex-1">
                   <span className="num-tabular text-xs text-slate-500 dark:text-slate-400">
                     {event.date}
+                    {formatEmailTime(event.occurredAt)}
                   </span>
                   <span className="mx-2 text-slate-300 dark:text-slate-700">·</span>
                   <span className="num-tabular font-medium text-slate-900 dark:text-slate-100">
@@ -635,6 +659,17 @@ ${monthPrefix}-17,FASTag Toll Plaza Electronic City Bangalore,350.00,,142300.00`
                   <span className="truncate text-slate-700 dark:text-slate-300">
                     {event.narration}
                   </span>
+                  {event.emailArchiveId || event.attachmentId ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setPreviewEvent(event)}
+                      className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline disabled:opacity-40 dark:text-indigo-400"
+                    >
+                      <Mail className="h-3.5 w-3.5" />
+                      Source email
+                    </button>
+                  ) : null}
                 </div>
 
                 {confirmReverseId === event.id ? (
@@ -672,6 +707,17 @@ ${monthPrefix}-17,FASTag Toll Plaza Electronic City Bangalore,350.00,,142300.00`
             ))}
           </ul>
         </section>
+      ) : null}
+
+      {previewEvent ? (
+        <SourceEmailPreview
+          workspaceId={workspaceId}
+          {...(previewEvent.emailArchiveId ? { emailArchiveId: previewEvent.emailArchiveId } : {})}
+          {...(!previewEvent.emailArchiveId && previewEvent.attachmentId
+            ? { attachmentId: previewEvent.attachmentId }
+            : {})}
+          onClose={() => setPreviewEvent(undefined)}
+        />
       ) : null}
     </div>
   );

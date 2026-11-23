@@ -34,6 +34,11 @@ fn save_email_eml(req: SaveEmailRequest) -> Result<SavedEmailResult, String> {
 }
 
 #[tauri::command]
+fn save_email_file(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String> {
+    save_email_file_impl(req)
+}
+
+#[tauri::command]
 async fn imap_test_connection(config: ImapConfig) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         imap_test_connection_impl(config)
@@ -96,6 +101,7 @@ fn main() {
             read_file_base64,
             organize_accounting_file,
             save_email_eml,
+            save_email_file,
             imap_test_connection,
             imap_fetch_messages,
             keyring_store_credential,

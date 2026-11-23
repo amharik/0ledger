@@ -12,6 +12,8 @@ import type {
   CostCenter,
   CostCenterAllocation,
   DriveLink,
+  EmailArchive,
+  EmailArchiveFile,
   Godown,
   ImportBatch,
   ItemLine,
@@ -34,7 +36,7 @@ import type {
 } from '../model';
 
 export const DB_NAME = '0ledger';
-export const DB_VERSION = 4;
+export const DB_VERSION = 6;
 
 export interface KeyValue {
   key: string;
@@ -59,6 +61,8 @@ export class LedgerDatabase extends Dexie {
   costCenterAllocations!: Table<CostCenterAllocation, string>;
   taxAllocations!: Table<TaxAllocation, string>;
   attachments!: Table<Attachment, string>;
+  emailArchives!: Table<EmailArchive, string>;
+  emailArchiveFiles!: Table<EmailArchiveFile, string>;
   importBatches!: Table<ImportBatch, string>;
   statementLines!: Table<StatementLine, string>;
   reconciliations!: Table<Reconciliation, string>;
@@ -129,6 +133,17 @@ export class LedgerDatabase extends Dexie {
       canonicalTxns:
         'id, workspaceId, txnUid, reference, [workspaceId+date], [workspaceId+status], linkGroupId, postedVoucherId',
       ownAccounts: 'id, workspaceId, [workspaceId+institution], [workspaceId+accountTail]',
+    });
+
+    this.version(5).stores({
+      emailArchives:
+        'id, workspaceId, messageId, [workspaceId+uid], [workspaceId+date], sha256, receivedAt',
+      emailArchiveFiles: 'id, workspaceId, emailArchiveId, sha256',
+    });
+
+    this.version(6).stores({
+      emailArchives:
+        'id, workspaceId, messageId, [workspaceId+mailbox+uid], [workspaceId+uid], [workspaceId+date], sha256, receivedAt',
     });
   }
 }

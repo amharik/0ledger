@@ -424,10 +424,10 @@ export async function computeTransactionDedupeKey(params: {
   );
 }
 
-function attachmentStatement(
+async function attachmentStatement(
   attachment: ParsedEmailAttachment,
-  password?: string,
-): Promise<ParsedStatement> | ParsedStatement | undefined {
+  passwords: string[],
+): Promise<ParsedStatement | undefined> {
   const name = attachment.fileName.toLowerCase();
   if (name.endsWith('.csv') || attachment.mimeType === 'text/csv') {
     const text = new TextDecoder().decode(attachment.bytes);
@@ -437,10 +437,18 @@ function attachmentStatement(
     return parseXlsxStatement(attachment.bytes, { fileName: attachment.fileName });
   }
   if (name.endsWith('.pdf') || attachment.mimeType === 'application/pdf') {
-    return parsePdfStatement(attachment.bytes, {
-      fileName: attachment.fileName,
-      ...(password ? { password } : {}),
-    });
+    let lastError: unknown;
+    for (const password of passwords.length > 0 ? passwords : [undefined]) {
+      try {
+        return await parsePdfStatement(attachment.bytes, {
+          fileName: attachment.fileName,
+          ...(password ? { password } : {}),
+        });
+      } catch (cause) {
+        lastError = cause;
+      }
+    }
+    throw lastError;
   }
   if (name.endsWith('.txt')) {
     return parseTextStatement(new TextDecoder().decode(attachment.bytes), {
@@ -631,13 +639,16 @@ export function parseAlertEmail(email: ParsedEmail): ParsedStatement | undefined
 
 export async function parseEmailStatements(
   source: string | ArrayBuffer | Uint8Array,
-  options: { password?: string } = {},
+  options: { password?: string; passwords?: string[] } = {},
 ): Promise<{ email: ParsedEmail; statements: ParsedStatement[] }> {
   const email = await parseEmail(source);
+  const passwords = [...new Set([options.password, ...(options.passwords ?? [])])].filter(
+    (value): value is string => Boolean(value?.trim()),
+  );
   const statements: ParsedStatement[] = [];
   for (const attachment of email.attachments) {
-    const result = attachmentStatement(attachment, options.password);
-    if (result) statements.push(await result);
+    const result = await attachmentStatement(attachment, passwords);
+    if (result) statements.push(result);
   }
   if (statements.length === 0) {
     const alert = parseAlertEmail(email);

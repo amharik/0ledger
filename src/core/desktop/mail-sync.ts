@@ -10,6 +10,8 @@ import { newId, nowIso } from '@/core/ids';
 import { sha256Hex } from '@/core/util/hash';
 import { storeRawArtifact, processFinancialObservation } from '@/core/canonical/engine';
 import { getDefaultFolders } from './folder-watcher';
+import { archiveEmail, bytesToBase64, type StoredEmailFile } from './email-archive';
+import { generatePasswordCandidates } from '@/core/ingest/passwords';
 import { getServerTenantId, serverHeaders } from '@/core/server/server-client';
 
 export type MailboxProvider = 'gmail' | 'outlook' | 'zoho' | 'yahoo' | 'custom';
@@ -21,6 +23,14 @@ export interface ImapConfig {
   password: string;
   mailbox?: string;
   tls?: boolean;
+}
+
+export interface MailFilter {
+  id: string;
+  name: string;
+  query: string;
+  days: number;
+  limit: number;
 }
 
 export interface MailboxAccount {
@@ -38,6 +48,7 @@ export interface MailboxAccount {
   defaultDays?: number;
   defaultLimit?: number;
   defaultBankLedgerId?: string;
+  filters?: MailFilter[];
   lastSyncedAt?: string;
   createdAt?: string;
 }
@@ -82,11 +93,13 @@ export interface SyncedTransactionItem {
   subject: string;
   sender: string;
   date: string;
+  occurredAt?: string | undefined;
   amountMinor: number;
   direction: 'in' | 'out';
   transactionId?: string | undefined;
   attachmentId?: string | undefined;
   attachmentPath?: string | undefined;
+  emailArchiveId?: string | undefined;
   canonicalTxnId?: string | undefined;
   observationId?: string | undefined;
   idBasis?: string | undefined;
@@ -99,9 +112,15 @@ export interface MailSyncReport {
   newMessages: number;
   transactionsCreated: number;
   attachmentsCreated: number;
+  enhanced?: number;
   items: SyncedTransactionItem[];
   skipped: Array<{ uid: number; subject: string; reason: string }>;
   errors: string[];
+}
+
+export interface MailSyncOptions {
+  accountId?: string;
+  statementPassword?: string;
 }
 
 export interface MailSyncHistoryEntry {
@@ -173,6 +192,7 @@ const IMAP_CONFIG_KEY = '0ledger.mail_sync.config';
 const MAILBOXES_KEY = '0ledger.mailboxes';
 const memoryStore = new Map<string, string>();
 const sessionPasswords = new Map<string, string>();
+const sessionStatementPasswords = new Map<string, string>();
 
 function getStorageItem(key: string): string | null {
   if (typeof localStorage !== 'undefined') {
@@ -259,12 +279,16 @@ export function clearMailSyncStorage(workspaceId?: string): void {
     for (const key of [...sessionPasswords.keys()]) {
       if (key.startsWith(prefix)) sessionPasswords.delete(key);
     }
+    for (const key of [...sessionStatementPasswords.keys()]) {
+      if (key.startsWith(prefix)) sessionStatementPasswords.delete(key);
+    }
   } else {
     if (typeof localStorage !== 'undefined') {
       localStorage.clear();
     }
     memoryStore.clear();
     sessionPasswords.clear();
+    sessionStatementPasswords.clear();
   }
 }
 
@@ -346,12 +370,16 @@ export async function migrateMailboxCredentials(
 }
 
 // Native Keyring integration for desktop OS (Keychain / Secret Service / DPAPI)
-export async function storeNativePassword(accountKey: string, secret: string): Promise<boolean> {
+export async function storeNativePassword(
+  accountKey: string,
+  secret: string,
+  service = '0ledger.mail',
+): Promise<boolean> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('keyring_store_credential', {
-        service: '0ledger.mail',
+        service,
         account: accountKey,
         secret,
       });
@@ -363,12 +391,15 @@ export async function storeNativePassword(accountKey: string, secret: string): P
   return false;
 }
 
-export async function getNativePassword(accountKey: string): Promise<string | undefined> {
+export async function getNativePassword(
+  accountKey: string,
+  service = '0ledger.mail',
+): Promise<string | undefined> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const pass = await invoke<string>('keyring_get_credential', {
-        service: '0ledger.mail',
+        service,
         account: accountKey,
       });
       if (pass) return pass;
@@ -377,16 +408,57 @@ export async function getNativePassword(accountKey: string): Promise<string | un
   return undefined;
 }
 
-export async function deleteNativePassword(accountKey: string): Promise<void> {
+export async function deleteNativePassword(
+  accountKey: string,
+  service = '0ledger.mail',
+): Promise<void> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('keyring_delete_credential', {
-        service: '0ledger.mail',
+        service,
         account: accountKey,
       });
     } catch {}
   }
+}
+
+function statementCredentialKey(workspaceId: string, accountId: string): string {
+  return `${credentialKey(workspaceId, accountId)}:statement`;
+}
+
+export async function storeStatementPassword(
+  workspaceId: string,
+  accountId: string,
+  password: string,
+): Promise<boolean> {
+  const key = statementCredentialKey(workspaceId, accountId);
+  if (!password.trim()) {
+    sessionStatementPasswords.delete(key);
+    await deleteNativePassword(key, '0ledger.statement');
+    return false;
+  }
+  sessionStatementPasswords.set(key, password);
+  return storeNativePassword(key, password, '0ledger.statement');
+}
+
+export async function getStatementPassword(
+  workspaceId: string,
+  accountId: string,
+): Promise<string | undefined> {
+  const key = statementCredentialKey(workspaceId, accountId);
+  const native = await getNativePassword(key, '0ledger.statement');
+  if (native) return native;
+  return sessionStatementPasswords.get(key);
+}
+
+export async function deleteStatementPassword(
+  workspaceId: string,
+  accountId: string,
+): Promise<void> {
+  const key = statementCredentialKey(workspaceId, accountId);
+  sessionStatementPasswords.delete(key);
+  await deleteNativePassword(key, '0ledger.statement');
 }
 
 export function listMailboxes(workspaceId: string): MailboxAccount[] {
@@ -525,6 +597,59 @@ export async function saveMailbox(
   }
 }
 
+export function listMailboxFilters(workspaceId: string, accountId: string): MailFilter[] {
+  const account = listMailboxes(workspaceId).find((item) => item.id === accountId);
+  return account?.filters ?? [];
+}
+
+export async function saveMailboxFilters(
+  workspaceId: string,
+  accountId: string,
+  filters: MailFilter[],
+  db?: LedgerDatabase,
+): Promise<MailFilter[]> {
+  const account = listMailboxes(workspaceId).find((item) => item.id === accountId);
+  if (!account) return [];
+  const clean = filters
+    .map((filter) => ({
+      id: filter.id,
+      name: filter.name.trim().slice(0, 80),
+      query: filter.query.trim().slice(0, 512),
+      days: Math.max(1, Math.min(365, Math.round(filter.days) || 60)),
+      limit: Math.max(1, Math.min(50, Math.round(filter.limit) || 25)),
+    }))
+    .filter((filter) => filter.name && filter.query);
+  await saveMailbox(workspaceId, { ...account, filters: clean }, undefined, db);
+  return clean;
+}
+
+export async function upsertMailboxFilter(
+  workspaceId: string,
+  accountId: string,
+  filter: MailFilter,
+  db?: LedgerDatabase,
+): Promise<MailFilter[]> {
+  const current = listMailboxFilters(workspaceId, accountId);
+  const next = current.some((item) => item.id === filter.id)
+    ? current.map((item) => (item.id === filter.id ? filter : item))
+    : [...current, filter];
+  return saveMailboxFilters(workspaceId, accountId, next, db);
+}
+
+export async function deleteMailboxFilter(
+  workspaceId: string,
+  accountId: string,
+  filterId: string,
+  db?: LedgerDatabase,
+): Promise<MailFilter[]> {
+  return saveMailboxFilters(
+    workspaceId,
+    accountId,
+    listMailboxFilters(workspaceId, accountId).filter((item) => item.id !== filterId),
+    db,
+  );
+}
+
 export function setDefaultMailbox(
   workspaceId: string,
   id: string,
@@ -578,6 +703,7 @@ export async function deleteMailbox(
     await persistMailboxesToDb(db, workspaceId, list);
   }
   await deleteMailboxPassword(workspaceId, id);
+  await deleteStatementPassword(workspaceId, id);
 }
 
 export function getActiveMailbox(workspaceId: string, id?: string): MailboxAccount | undefined {
@@ -737,6 +863,13 @@ export async function listRecentMailHistory(
   }
 }
 
+function emailTimestamp(value?: string): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
 export function base64ToUint8Array(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -809,6 +942,37 @@ export async function saveEmailAttachment(
   }
 }
 
+async function saveEmailFileToVault(
+  archiveRoot: string,
+  companyName: string,
+  fy: string,
+  month: string,
+  file: { fileName: string; mimeType: string; bytes: Uint8Array },
+): Promise<StoredEmailFile | undefined> {
+  if (!isTauri()) return undefined;
+  try {
+    const res = await invoke<SavedEmailResult>('save_email_file', {
+      req: {
+        archive_root: archiveRoot,
+        company_name: companyName,
+        financial_year: fy,
+        period_month: month,
+        subfolder: 'Attachments',
+        file_name: `${crypto.randomUUID().slice(0, 8)}_${file.fileName.slice(0, 200)}`,
+        bytes_base64: bytesToBase64(file.bytes),
+      },
+    });
+    return {
+      storagePath: res.file_path,
+      sizeBytes: res.size_bytes,
+      sha256: res.sha256,
+    };
+  } catch (err) {
+    console.warn('Failed to archive email attachment to vault:', err);
+    return undefined;
+  }
+}
+
 export async function syncLocalMail(
   db: LedgerDatabase,
   workspaceId: string,
@@ -816,6 +980,7 @@ export async function syncLocalMail(
   query: ImapQuery,
   bankLedgerId?: string,
   onProgress?: (progress: MailProgressPayload) => void,
+  options: MailSyncOptions = {},
 ): Promise<MailSyncReport> {
   let unlistenProgress: UnlistenFn | undefined;
   if (isTauri() && onProgress) {
@@ -831,6 +996,7 @@ export async function syncLocalMail(
     newMessages: 0,
     transactionsCreated: 0,
     attachmentsCreated: 0,
+    enhanced: 0,
     items: [],
     skipped: [],
     errors: [],
@@ -869,6 +1035,23 @@ export async function syncLocalMail(
 
     const company = await db.companies.where('workspaceId').equals(workspaceId).first();
     const companyName = company?.legalName || 'General';
+    const storedStatementPassword = options.accountId
+      ? await getStatementPassword(workspaceId, options.accountId)
+      : undefined;
+    const generatedPasswords = generatePasswordCandidates(
+      {
+        ...(company?.legalName ? { fullName: company.legalName } : {}),
+        ...(company?.pan ? { pan: company.pan } : {}),
+      },
+      { institution: config.host },
+    ).map((candidate) => candidate.password);
+    const statementPasswords = [
+      ...new Set(
+        [options.statementPassword, storedStatementPassword, ...generatedPasswords].filter(
+          (value): value is string => Boolean(value?.trim()),
+        ),
+      ),
+    ];
     const defaults = await getDefaultFolders();
     const archiveRoot = defaults.archive_folder;
 
@@ -911,7 +1094,9 @@ export async function syncLocalMail(
         let attached: { attachmentId: string; filePath: string } | undefined;
 
         try {
-          const parsed = await parseEmailStatements(rawBytes);
+          const parsed = await parseEmailStatements(rawBytes, {
+            ...(statementPasswords.length > 0 ? { passwords: statementPasswords } : {}),
+          });
           if (parsed.statements.length > 0) {
             attached = await saveEmailAttachment(
               db,
@@ -923,6 +1108,28 @@ export async function syncLocalMail(
               monthStr,
             );
             if (attached) report.attachmentsCreated += 1;
+
+            const archived = await archiveEmail(db, {
+              workspaceId,
+              ...(options.accountId ? { accountId: options.accountId } : {}),
+              uid: msg.uid,
+              ...(msg.uid_validity !== undefined ? { uidValidity: msg.uid_validity } : {}),
+              mailbox: mailboxName,
+              subject: msg.subject,
+              from: msg.from,
+              rawBytes,
+              ...(isTauri() && attached?.filePath ? { rawStoragePath: attached.filePath } : {}),
+              email: parsed.email,
+              statements: parsed.statements,
+              ...(attached?.attachmentId ? { emlAttachmentId: attached.attachmentId } : {}),
+              ...(isTauri()
+                ? {
+                    storeFile: (file) =>
+                      saveEmailFileToVault(archiveRoot, companyName, fy, monthStr, file),
+                  }
+                : {}),
+            });
+            const occurredAt = emailTimestamp(parsed.email.date);
 
             const rawHash = await sha256Hex(rawBytes);
             const artifact = await storeRawArtifact(db, workspaceId, {
@@ -951,9 +1158,15 @@ export async function syncLocalMail(
                 workspaceId,
                 staged.batch,
                 staged.lines,
-                attached?.attachmentId ? { attachmentId: attached.attachmentId } : undefined,
+                {
+                  ...(attached?.attachmentId ? { attachmentId: attached.attachmentId } : {}),
+                  emailArchiveId: archived.archive.id,
+                  ...(occurredAt ? { occurredAt } : {}),
+                  mergeDuplicates: true,
+                },
               );
               txnsForMsg += captured.created.length;
+              report.enhanced = (report.enhanced ?? 0) + captured.enhanced;
 
               for (const row of statement.rows) {
                 const isOut = row.debitMinor > row.creditMinor;
@@ -982,6 +1195,8 @@ export async function syncLocalMail(
                   transactionId: row.reference,
                   attachmentId: attached?.attachmentId,
                   attachmentPath: attached?.filePath,
+                  emailArchiveId: archived.archive.id,
+                  ...(occurredAt ? { occurredAt } : {}),
                   canonicalTxnId: obsRes.canonicalTxn.id,
                   observationId: obsRes.observation.id,
                   idBasis: obsRes.canonicalTxn.idBasis,
@@ -1006,6 +1221,38 @@ export async function syncLocalMail(
             );
             if (attached) report.attachmentsCreated += 1;
 
+            const parsedEmail = await parseEmailStatements(rawBytes, {
+              ...(statementPasswords.length > 0 ? { passwords: statementPasswords } : {}),
+            }).then((result) => result.email).catch(() => undefined);
+            const archived = await archiveEmail(db, {
+              workspaceId,
+              ...(options.accountId ? { accountId: options.accountId } : {}),
+              uid: msg.uid,
+              ...(msg.uid_validity !== undefined ? { uidValidity: msg.uid_validity } : {}),
+              mailbox: mailboxName,
+              subject: msg.subject,
+              from: msg.from,
+              rawBytes,
+              ...(isTauri() && attached?.filePath ? { rawStoragePath: attached.filePath } : {}),
+              email: parsedEmail ?? {
+                subject: msg.subject,
+                from: msg.from,
+                date: msg.date,
+                text: '',
+                attachments: [],
+                raw: {},
+              },
+              statements: [alertStmt],
+              ...(attached?.attachmentId ? { emlAttachmentId: attached.attachmentId } : {}),
+              ...(isTauri()
+                ? {
+                    storeFile: (file) =>
+                      saveEmailFileToVault(archiveRoot, companyName, fy, monthStr, file),
+                  }
+                : {}),
+            });
+            const occurredAt = emailTimestamp(msg.date);
+
             const rawHash = await sha256Hex(rawBytes);
             const artifact = await storeRawArtifact(db, workspaceId, {
               source: 'email',
@@ -1028,9 +1275,15 @@ export async function syncLocalMail(
               workspaceId,
               staged.batch,
               staged.lines,
-              attached?.attachmentId ? { attachmentId: attached.attachmentId } : undefined,
+              {
+                ...(attached?.attachmentId ? { attachmentId: attached.attachmentId } : {}),
+                emailArchiveId: archived.archive.id,
+                ...(occurredAt ? { occurredAt } : {}),
+                mergeDuplicates: true,
+              },
             );
             txnsForMsg += captured.created.length;
+            report.enhanced = (report.enhanced ?? 0) + captured.enhanced;
 
             for (const row of alertStmt.rows) {
               const isOut = row.debitMinor > row.creditMinor;
@@ -1059,6 +1312,8 @@ export async function syncLocalMail(
                 transactionId: row.reference,
                 attachmentId: attached?.attachmentId,
                 attachmentPath: attached?.filePath,
+                emailArchiveId: archived.archive.id,
+                ...(occurredAt ? { occurredAt } : {}),
                 canonicalTxnId: obsRes.canonicalTxn.id,
                 observationId: obsRes.observation.id,
                 idBasis: obsRes.canonicalTxn.idBasis,

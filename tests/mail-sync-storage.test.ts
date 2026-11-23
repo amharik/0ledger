@@ -5,8 +5,13 @@ import {
   deleteMailbox,
   getActiveMailbox,
   getMailboxPassword,
+  getStatementPassword,
+  saveMailboxFilters,
+  storeStatementPassword,
   clearMailSyncStorage,
+  listMailboxFilters,
   type MailboxAccount,
+  type MailFilter,
 } from '@/core/desktop/mail-sync';
 import { clearServerClientConfig, setServerTenantId } from '@/core/server/server-client';
 
@@ -160,5 +165,35 @@ describe('Mail Sync secure storage and tenant isolation', () => {
     expect(list[0]!.id).toBe('mbx_2');
     expect(list[0]!.isDefault).toBe(true);
     expect(await getMailboxPassword(workspaceId, 'mbx_1')).toBeUndefined();
+  });
+
+  it('persists custom filters and clamps limits to the server maximum', async () => {
+    const box = account('mbx_filters', 'filters@test.com');
+    await saveMailbox(workspaceId, box, 'secret');
+
+    const filter: MailFilter = {
+      id: 'flt_1',
+      name: 'HDFC alerts',
+      query: 'hdfcbank',
+      days: 90,
+      limit: 500,
+    };
+    const saved = await saveMailboxFilters(workspaceId, box.id, [filter]);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.limit).toBe(50);
+    expect(listMailboxFilters(workspaceId, box.id)[0]?.query).toBe('hdfcbank');
+
+    setServerTenantId('tenant-b');
+    expect(listMailboxFilters(workspaceId, box.id)).toEqual([]);
+    setServerTenantId('tenant-a');
+    expect(listMailboxFilters(workspaceId, box.id)[0]?.name).toBe('HDFC alerts');
+  });
+
+  it('stores statement PDF passwords in the statement keyring namespace', async () => {
+    const box = account('mbx_statement', 'statement@test.com');
+    await saveMailbox(workspaceId, box, 'secret');
+    await storeStatementPassword(workspaceId, box.id, 'pdf-secret');
+    expect(await getStatementPassword(workspaceId, box.id)).toBe('pdf-secret');
+    expect(await getMailboxPassword(workspaceId, box.id)).toBe('secret');
   });
 });

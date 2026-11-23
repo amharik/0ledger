@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Plus, Search, Trash2, X } from 'lucide-react';
+import { Mail, Plus, Search, Trash2, X } from 'lucide-react';
 import { getDb } from '@/core/db/db';
 import {
   cancelVoucher,
@@ -11,6 +11,8 @@ import {
 import { formatMinor, minorToDecimalString, parseAmountToMinor } from '@/core/money/money';
 import { compact } from '@/core/util/objects';
 import type { Ledger, NewVoucher, Voucher, VoucherType } from '@/core/model';
+import { findEmailArchiveForVoucher } from '@/core/desktop/email-archive';
+import { SourceEmailPreview } from './SourceEmailPreview';
 
 type Side = 'debit' | 'credit';
 
@@ -71,6 +73,8 @@ export function LedgerRegister({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [confirmAction, setConfirmAction] = useState<'cancel' | 'delete' | null>(null);
+  const [sourceEmailId, setSourceEmailId] = useState<string>();
+  const [previewEmailId, setPreviewEmailId] = useState<string>();
 
   // Edit draft state
   const [editDate, setEditDate] = useState('');
@@ -162,6 +166,24 @@ export function LedgerRegister({
     };
   }, [selectedId, refreshToken]);
 
+  useEffect(() => {
+    if (!selected) {
+      setSourceEmailId(undefined);
+      return;
+    }
+    let cancelled = false;
+    void findEmailArchiveForVoucher(getDb(), workspaceId, selected.voucher)
+      .then((archive) => {
+        if (!cancelled) setSourceEmailId(archive?.id);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceEmailId(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, workspaceId]);
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter(({ voucher, primaryLedger }) => {
@@ -236,6 +258,8 @@ export function LedgerRegister({
       roundOffLedgerId: voucher.roundOffLedgerId,
       source: voucher.source,
       sourceRef: voucher.sourceRef,
+      sourceEmailId: voucher.sourceEmailId,
+      sourceTimestamp: voucher.sourceTimestamp,
       groupIds: voucher.groupIds,
       accountingId: voucher.accountingId,
       tags: voucher.tags,
@@ -453,9 +477,26 @@ export function LedgerRegister({
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                   {selected.voucher.voucherType} · {selected.voucher.date}
+                  {selected.voucher.sourceTimestamp
+                    ? ` ${new Date(selected.voucher.sourceTimestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}`
+                    : ''}
                   {selected.voucher.source !== 'manual' ? ` · ${selected.voucher.source}` : ''}
                 </p>
               </div>
+              <div className="flex items-center gap-1">
+                {sourceEmailId ? (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewEmailId(sourceEmailId)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                    Source email
+                  </button>
+                ) : null}
               <button
                 type="button"
                 aria-label="Close voucher inspector"
@@ -464,6 +505,7 @@ export function LedgerRegister({
               >
                 <X className="h-4 w-4" />
               </button>
+              </div>
             </div>
 
             {editable ? (
@@ -692,6 +734,14 @@ export function LedgerRegister({
           </div>
         ) : null}
       </div>
+
+      {previewEmailId ? (
+        <SourceEmailPreview
+          workspaceId={workspaceId}
+          emailArchiveId={previewEmailId}
+          onClose={() => setPreviewEmailId(undefined)}
+        />
+      ) : null}
     </div>
   );
 }

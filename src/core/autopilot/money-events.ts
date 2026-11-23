@@ -26,6 +26,15 @@ import { classifyMoneyEventRisk, type MoneyEventRisk } from './risk';
 export interface CaptureEventsResult {
   created: MoneyEvent[];
   duplicates: number;
+  enhanced: number;
+}
+
+export interface CaptureStatementOptions {
+  attachmentId?: string;
+  attachmentIds?: string[];
+  emailArchiveId?: string;
+  occurredAt?: string;
+  mergeDuplicates?: boolean;
 }
 
 export interface MoneyEventQueueItem {
@@ -111,12 +120,13 @@ export async function captureStatementLines(
   workspaceId: string,
   batch: ImportBatch,
   lines: StatementLine[],
-  options?: { attachmentId?: string },
+  options?: CaptureStatementOptions,
 ): Promise<CaptureEventsResult> {
   await ensureSeedClassificationRules(db, workspaceId);
   const now = nowIso();
   const created: MoneyEvent[] = [];
   let duplicates = 0;
+  let enhanced = 0;
 
   for (const line of lines) {
     if (line.workspaceId !== workspaceId) throw new Error('Statement line belongs to another workspace');
@@ -162,9 +172,57 @@ export async function captureStatementLines(
 
     if (duplicate) {
       duplicates += 1;
+      if (options?.mergeDuplicates) {
+        const attachmentIds = new Set([
+          ...(duplicate.attachmentIds ?? []),
+          ...(duplicate.attachmentId ? [duplicate.attachmentId] : []),
+          ...(options.attachmentIds ?? []),
+          ...(options.attachmentId ? [options.attachmentId] : []),
+        ]);
+        const updates: Partial<MoneyEvent> = {};
+        if (!duplicate.attachmentId && options.attachmentId) updates.attachmentId = options.attachmentId;
+        if (attachmentIds.size !== (duplicate.attachmentIds?.length ?? 0)) {
+          updates.attachmentIds = [...attachmentIds];
+        }
+        if (!duplicate.emailArchiveId && options.emailArchiveId) {
+          updates.emailArchiveId = options.emailArchiveId;
+        }
+        if (!duplicate.occurredAt && options.occurredAt) updates.occurredAt = options.occurredAt;
+        if (Object.keys(updates).length > 0) {
+          updates.updatedAt = now;
+          await db.moneyEvents.update(duplicate.id, updates);
+          enhanced += 1;
+          if (duplicate.postedVoucherId) {
+            const voucher = await db.vouchers.get(duplicate.postedVoucherId);
+            if (voucher && voucher.workspaceId === workspaceId) {
+              await db.vouchers.update(voucher.id, {
+                ...(updates.emailArchiveId ? { sourceEmailId: updates.emailArchiveId } : {}),
+                ...(updates.occurredAt ? { sourceTimestamp: updates.occurredAt } : {}),
+                updatedAt: now,
+              });
+            }
+            for (const attachmentId of attachmentIds) {
+              const attachment = await db.attachments.get(attachmentId);
+              if (attachment && attachment.workspaceId === workspaceId && !attachment.voucherId) {
+                await db.attachments.update(attachmentId, {
+                  voucherId: duplicate.postedVoucherId,
+                  updatedAt: now,
+                });
+              }
+            }
+          }
+        }
+      }
       continue;
     }
 
+    const attachmentIds = [
+      ...new Set([
+        ...(options?.attachmentIds ?? []),
+        ...(options?.attachmentId ? [options.attachmentId] : []),
+        ...(typeof line.raw?.attachmentId === 'string' ? [line.raw.attachmentId] : []),
+      ]),
+    ];
     const event = MoneyEventSchema.parse(
       compact({
         id: newId('mev'),
@@ -190,6 +248,9 @@ export async function captureStatementLines(
         attachmentId:
           options?.attachmentId ??
           (typeof line.raw?.attachmentId === 'string' ? line.raw.attachmentId : undefined),
+        attachmentIds,
+        emailArchiveId: options?.emailArchiveId,
+        occurredAt: options?.occurredAt,
         confidence: 0,
         status: 'captured',
         createdAt: now,
@@ -207,9 +268,11 @@ export async function captureStatementLines(
     return {
       created: refreshed.filter((event): event is MoneyEvent => Boolean(event)),
       duplicates,
+      enhanced,
     };
   }
-  return { created, duplicates };
+  if (enhanced > 0) await markDriveDirty(db, workspaceId);
+  return { created, duplicates, enhanced };
 }
 
 export async function listMoneyEvents(
@@ -348,6 +411,8 @@ export async function approveMoneyEvent(
     currency: 'INR',
     source: event.source,
     sourceRef: event.sourceRef,
+    sourceEmailId: event.emailArchiveId,
+    sourceTimestamp: event.occurredAt,
     lines,
     items: [],
     groupIds: [],
@@ -381,8 +446,12 @@ export async function approveMoneyEvent(
     confidence: Math.max(event.confidence, suggestion?.confidence ?? 0),
     updatedAt: now,
   });
-  if (event.attachmentId) {
-    await db.attachments.update(event.attachmentId, {
+  const attachmentIds = new Set([
+    ...(event.attachmentIds ?? []),
+    ...(event.attachmentId ? [event.attachmentId] : []),
+  ]);
+  for (const attachmentId of attachmentIds) {
+    await db.attachments.update(attachmentId, {
       voucherId: posted.voucher.id,
       updatedAt: now,
     });
@@ -474,7 +543,7 @@ export async function autoPostEligibleEvents(
     const suggestion = await latestSuggestion(db, event.id);
     if (!suggestion?.ledgerId) continue;
     if (suggestion.taxHint) continue;
-    if (event.direction === 'out' && !event.attachmentId) continue;
+    if (event.direction === 'out' && !event.attachmentId && (event.attachmentIds?.length ?? 0) === 0) continue;
     if (!isCategoryEnabled(settings, suggestion.ledgerId)) continue;
     if (!event.bankLedgerId) continue;
     try {

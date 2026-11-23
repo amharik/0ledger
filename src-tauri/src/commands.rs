@@ -48,6 +48,17 @@ pub struct SaveEmailRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SaveEmailFileRequest {
+    pub archive_root: String,
+    pub company_name: String,
+    pub financial_year: String,
+    pub period_month: String,
+    pub subfolder: String,
+    pub file_name: String,
+    pub bytes_base64: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SavedEmailResult {
     pub file_path: String,
     pub file_name: String,
@@ -270,6 +281,43 @@ pub fn organize_accounting_file_impl(req: OrganizeRequest) -> Result<String, Str
     }
 
     Ok(dest.to_string_lossy().to_string())
+}
+
+pub fn save_email_file_impl(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.bytes_base64)
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+    let company = sanitize_path_segment(&req.company_name);
+    let fy = sanitize_path_segment(&req.financial_year);
+    let period = sanitize_path_segment(&req.period_month);
+    let subfolder = sanitize_path_segment(&req.subfolder);
+
+    let target_dir = Path::new(&req.archive_root)
+        .join(if company.is_empty() { "General" } else { &company })
+        .join(if fy.is_empty() { "FY_Current" } else { &fy })
+        .join(if period.is_empty() { "Current" } else { &period })
+        .join("Emails")
+        .join(if subfolder.is_empty() { "Attachments" } else { &subfolder });
+
+    fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create email archive directory {}: {}", target_dir.display(), e))?;
+
+    let clean_name = sanitize_path_segment(&req.file_name);
+    let file_name = if clean_name.is_empty() { "attachment.bin".to_string() } else { clean_name };
+    let dest = target_dir.join(&file_name);
+    fs::write(&dest, &bytes).map_err(|e| format!("Failed to write email attachment: {}", e))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256 = format!("{:x}", hasher.finalize());
+
+    Ok(SavedEmailResult {
+        file_path: dest.to_string_lossy().to_string(),
+        file_name,
+        size_bytes: bytes.len() as u64,
+        sha256,
+    })
 }
 
 pub fn save_email_eml_impl(req: SaveEmailRequest) -> Result<SavedEmailResult, String> {

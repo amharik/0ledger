@@ -288,6 +288,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
           setProgress(p);
           addLog(p.stage, p.message);
         },
+        { accountId: activeAccount.id },
       );
 
       setReport(res);
@@ -637,7 +638,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
               </label>
 
               <label>
-                App Password (persisted encrypted locally)
+                App Password (stored in OS keyring)
                 <input
                   type="password"
                   placeholder="e.g. abcd efgh ijkl mnop"
@@ -698,7 +699,7 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
               <div className="muted small" style={{ marginTop: '0.5rem', lineHeight: '1.5' }}>
                 1. Navigate to <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>Google App Passwords</a>.<br />
                 2. Enter an app name like <code>0ledger Desktop</code> and click <strong>Create</strong>.<br />
-                3. Copy the 16-character code and paste it into the password box above. Passwords are saved encrypted with your workspace key on-device.
+                3. Copy the 16-character code and paste it into the password box above. Passwords are stored in your OS keyring on desktop or this browser session only.
               </div>
             </details>
           </div>
@@ -761,7 +762,6 @@ export function MailSyncPanel({ workspaceId, onNotice }: Props) {
               <option value={10}>10 emails</option>
               <option value={25}>25 emails</option>
               <option value={50}>50 emails</option>
-              <option value={100}>100 emails</option>
             </select>
           </label>
 

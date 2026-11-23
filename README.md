@@ -32,7 +32,7 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full set, including state
 ## What it does (target)
 
 1. **Capture** — import `.eml`, capture a webmail message, or optionally sync Gmail.
-2. **Parse** — bank/FASTag statements in PDF, password-protected PDF, CSV and Excel; statement adapters are data-driven.
+2. **Parse** — bank/FASTag statements in PDF, password-protected PDF, CSV and Excel; statement adapters are data-driven. IMAP sync supports persistent multi-select sender/subject filters, monthly statement detection, per-mailbox PDF passwords, and source-email previews from the Money Inbox and ledger.
 3. **Post** — review parsed candidates, group them under a project / expense / accounting ID, add manual entries.
 4. **Reconcile** — match statement lines to ledger vouchers; post explicit round-off; balance assertions.
 5. **Mirror** — scheduled push to one Google Sheet workbook per workspace, plus monthly `.xlsx` archives.
@@ -194,7 +194,8 @@ validation and numbering path; re-imports are deduplicated.
 
 - No remote 0ledger service. The optional API server runs locally; enable `SERVER_AUTH_SECRET` whenever it is exposed beyond loopback. Nothing is uploaded unless you connect Google Drive/Sheets.
 - Email bodies and statement contents are processed on-device. Parsed data is staged before commit.
-- Mailbox passwords are stored in the OS keyring on desktop or in memory for the browser session; they are never written to IndexedDB or `localStorage`. Protected PDFs ask for a password at parse time; optional "remember this batch" is encrypted.
+- Mailbox passwords and optional statement-PDF passwords are stored in the OS keyring on desktop or in memory for the browser session; they are never written to IndexedDB or `localStorage`. Protected PDFs try the saved statement password and generated candidates at parse time.
+- Emails that produce transactions are archived with their attachments. Desktop stores `.eml` and attachment files in the local vault and keeps paths in IndexedDB; browser mode keeps the bytes in the local IndexedDB database. Source-email previews are available from Money Inbox and ledger records.
 - Google Sheets mirror is plaintext in your Drive by design; local data and backups can be encrypted.
 - Scanned PDFs without a text layer are flagged as requiring OCR; this build does not bundle OCR.
 

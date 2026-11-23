@@ -380,6 +380,8 @@ export const VoucherSchema = z
     roundOffLedgerId: entityId.optional(),
     source: VoucherSourceSchema.default('manual'),
     sourceRef: z.string().max(512).optional(),
+    sourceEmailId: entityId.optional(),
+    sourceTimestamp: isoTimestamp.optional(),
     reversesVoucherId: entityId.optional(),
     groupIds: z.array(entityId).default([]),
     accountingId: z.string().max(128).optional(),
@@ -412,6 +414,8 @@ export const NewVoucherSchema = z
     roundOffLedgerId: entityId.optional(),
     source: VoucherSourceSchema.default('manual'),
     sourceRef: z.string().max(512).optional(),
+    sourceEmailId: entityId.optional(),
+    sourceTimestamp: isoTimestamp.optional(),
     reversesVoucherId: entityId.optional(),
     groupIds: z.array(entityId).default([]),
     accountingId: z.string().max(128).optional(),
@@ -498,6 +502,47 @@ export const AttachmentSchema = z
     sizeBytes: z.number().int().nonnegative(),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
     storageKey: z.string().max(512),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const EmailArchiveFileSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    emailArchiveId: entityId,
+    fileName: z.string().min(1).max(512),
+    mimeType: z.string().max(128),
+    sizeBytes: z.number().int().nonnegative(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    contentBase64: z.string().max(80 * 1024 * 1024).optional(),
+    storagePath: z.string().max(1024).optional(),
+  })
+  .merge(TimestampedSchema)
+  .strict();
+
+export const EmailArchiveSchema = z
+  .object({
+    id: entityId,
+    workspaceId: entityId,
+    accountId: z.string().max(128).optional(),
+    mailbox: z.string().max(256).optional(),
+    uid: z.number().int().nonnegative(),
+    uidValidity: z.number().int().nonnegative().optional(),
+    messageId: z.string().max(512).optional(),
+    subject: z.string().max(1024),
+    from: z.string().max(512),
+    date: isoTimestamp.optional(),
+    receivedAt: isoTimestamp,
+    rawBase64: z.string().max(80 * 1024 * 1024).optional(),
+    rawStoragePath: z.string().max(1024).optional(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sizeBytes: z.number().int().nonnegative(),
+    attachmentIds: z.array(entityId).default([]),
+    fileIds: z.array(entityId).default([]),
+    isMonthlyStatement: z.boolean().default(false),
+    statementPeriod: z.string().max(32).optional(),
+    statementCount: z.number().int().nonnegative().default(0),
   })
   .merge(TimestampedSchema)
   .strict();
@@ -606,6 +651,9 @@ export const MoneyEventSchema = z
     partyHint: shortText.optional(),
     narration: z.string().max(1024),
     attachmentId: entityId.optional(),
+    attachmentIds: z.array(entityId).optional(),
+    emailArchiveId: entityId.optional(),
+    occurredAt: isoTimestamp.optional(),
     confidence: z.number().min(0).max(1).default(0),
     status: z.enum(MONEY_EVENT_STATUSES).default('captured'),
     postedVoucherId: entityId.optional(),
@@ -738,6 +786,8 @@ export type Voucher = z.infer<typeof VoucherSchema>;
 export type VoucherLine = z.infer<typeof VoucherLineSchema>;
 export type ItemLine = z.infer<typeof ItemLineSchema>;
 export type Attachment = z.infer<typeof AttachmentSchema>;
+export type EmailArchive = z.infer<typeof EmailArchiveSchema>;
+export type EmailArchiveFile = z.infer<typeof EmailArchiveFileSchema>;
 export type ImportBatch = z.infer<typeof ImportBatchSchema>;
 export type Reconciliation = z.infer<typeof ReconciliationSchema>;
 export type StatementLine = z.infer<typeof StatementLineSchema>;

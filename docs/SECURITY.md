@@ -38,9 +38,16 @@ server-side rendering.
   addresses unless `ALLOW_PRIVATE_IMAP=true` is explicitly set. DNS results are checked before connect.
 - `/api` is rate limited (`SERVER_RATE_LIMIT_PER_MINUTE`, default 60) and returns `Retry-After` on 429.
 - Optional TLS via `SERVER_TLS_CERT`/`SERVER_TLS_KEY`; HSTS and restrictive security headers are set.
-- Mailbox passwords are stored in the OS keyring (desktop) or memory only (browser session), scoped by
-  tenant/workspace/account. Legacy XOR ciphers are migrated and stripped from storage.
+- Mailbox passwords and optional statement-PDF passwords are stored in the OS keyring (desktop) or
+  memory only (browser session), scoped by tenant/workspace/account. Legacy XOR ciphers are migrated and
+  stripped from storage.
 - IMAP fetch is paginated (`limit` max 50, `cursor`/`nextCursor`) to bound memory and response size.
+- Custom sender/subject filters are stored as mailbox metadata, not credentials. Multi-filter runs are
+  sequential to respect IMAP rate limits.
+- Transaction-producing emails are archived with their attachments. Desktop stores raw `.eml` and
+  attachment files in the local vault and keeps only paths in IndexedDB; browser mode stores the bytes
+  in IndexedDB. Treat the browser profile and desktop vault as sensitive local data and use disk
+  encryption.
 
 ## Threat model
 
