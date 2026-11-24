@@ -24,6 +24,14 @@ export interface ParsedStatementRow {
 
 export type StatementExtractor = 'docling-native' | 'docling-ocr' | 'text' | 'csv' | 'xlsx' | 'email';
 
+export interface DepositAccountRef {
+  numberMasked: string;
+  tail: string;
+  description?: string;
+  maturityDate?: string;
+  principalMinor?: number;
+}
+
 export interface ParsedStatementMetadata {
   accountNumberMasked?: string;
   accountTail?: string;
@@ -41,6 +49,8 @@ export interface ParsedStatementMetadata {
   branch?: string;
   statementFrom?: string;
   statementTo?: string;
+  fixedDeposits?: DepositAccountRef[];
+  ppfAccounts?: DepositAccountRef[];
   pageCount?: number;
   textPages?: number;
   ocrPages?: number;

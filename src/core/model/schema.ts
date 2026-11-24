@@ -547,6 +547,16 @@ export const EmailArchiveSchema = z
   .merge(TimestampedSchema)
   .strict();
 
+export const DepositAccountSchema = z
+  .object({
+    numberMasked: z.string().max(64),
+    tail: z.string().max(8),
+    description: z.string().max(256).optional(),
+    maturityDate: isoDate.optional(),
+    principalMinor: minorAmount.optional(),
+  })
+  .strict();
+
 export const ImportBatchSchema = z
   .object({
     id: entityId,
@@ -567,6 +577,8 @@ export const ImportBatchSchema = z
     ifsc: z.string().max(11).optional(),
     statementFrom: isoDate.optional(),
     statementTo: isoDate.optional(),
+    fixedDeposits: z.array(DepositAccountSchema).max(50).optional(),
+    ppfAccounts: z.array(DepositAccountSchema).max(50).optional(),
     repairedRows: z.number().int().nonnegative().optional(),
     committedLines: z.number().int().nonnegative().default(0),
     failedLines: z.number().int().nonnegative().default(0),

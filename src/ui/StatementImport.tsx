@@ -465,6 +465,14 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
                   {activeBatch.ifsc ? `IFSC ${activeBatch.ifsc}` : ''}
                 </p>
               ) : null}
+              {activeBatch.fixedDeposits?.length || activeBatch.ppfAccounts?.length ? (
+                <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                  {[
+                    ...(activeBatch.fixedDeposits ?? []).map((deposit) => `FD ${deposit.numberMasked}`),
+                    ...(activeBatch.ppfAccounts ?? []).map((deposit) => `PPF ${deposit.numberMasked}`),
+                  ].join(' · ')}
+                </p>
+              ) : null}
             </div>
 
             {balanceCheck && (balanceCheck.checked > 0 || balanceCheck.expectedClosingMinor !== undefined) ? (

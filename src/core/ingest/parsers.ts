@@ -7,6 +7,7 @@ import { detectInstitution, identifyUniqueAccount } from './accounts';
 import { assertByteLimit, assertRowLimit, assertTextLimit } from './limits';
 import { verifyStatementBalance, type BalanceLine, type BalanceMismatch } from './balance';
 import type {
+  DepositAccountRef,
   ParsedStatement,
   ParsedStatementMetadata,
   ParsedStatementRow,
@@ -1083,6 +1084,73 @@ function cleanMetadataValue(value: string): string {
   return value.replace(METADATA_LABELS, '').replace(/\s+/g, ' ').trim();
 }
 
+const DEPOSIT_NUMBER_TOKEN = String.raw`([Xx*•]{2,}\d{2,8}|\d{6,18})`;
+const FD_INLINE = new RegExp(
+  String.raw`(?:fixed\s+deposits?|term\s+deposits?|\bfd\b)\s*(?:a\/c|account|ac|no\.?|number|#)?[:\s#-]*${DEPOSIT_NUMBER_TOKEN}`,
+  'i',
+);
+const PPF_INLINE = new RegExp(
+  String.raw`(?:public\s+provident\s+fund|\bppf\b)\s*(?:a\/c|account|ac|no\.?|number|#)?[:\s#-]*${DEPOSIT_NUMBER_TOKEN}`,
+  'i',
+);
+const DEPOSIT_LABEL = /^(?:fixed\s+deposits?|term\s+deposits?|fd|ppf|public\s+provident\s+fund)$/i;
+const DEPOSIT_NUMBER_CELL = /^(?:[Xx*•]{2,}\d{2,8}|\d{6,18})$/;
+
+/**
+ * Pull FD/PPF deposit references out of a bank monthly summary. Only masked
+ * tails are retained; the raw number never leaves this function.
+ */
+function extractDepositAccounts(markdown: string): {
+  fixedDeposits: DepositAccountRef[];
+  ppfAccounts: DepositAccountRef[];
+} {
+  const fixedDeposits: DepositAccountRef[] = [];
+  const ppfAccounts: DepositAccountRef[] = [];
+  const seen = new Set<string>();
+
+  const push = (list: DepositAccountRef[], raw: string, context: string) => {
+    const masked = maskAccountNumber(raw);
+    if (!masked) return;
+    const key = `${list === ppfAccounts ? 'ppf' : 'fd'}:${masked.masked}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push({
+      numberMasked: masked.masked,
+      tail: masked.tail,
+      ...(context ? { description: context.slice(0, 256) } : {}),
+    });
+  };
+
+  for (const line of markdown.split(/\r?\n/)) {
+    if (!line.trim() || isMarkdownSeparator(line)) continue;
+    const cells = line
+      .split('|')
+      .map((cell) => cell.trim())
+      .filter(Boolean);
+    const text = cells.join(' ').replace(/\s+/g, ' ').trim();
+
+    const fd = text.match(FD_INLINE);
+    if (fd?.[1]) push(fixedDeposits, fd[1], text);
+    const ppf = text.match(PPF_INLINE);
+    if (ppf?.[1]) push(ppfAccounts, ppf[1], text);
+
+    if (cells.length >= 2) {
+      const labelIndex = cells.findIndex((cell) => DEPOSIT_LABEL.test(cell));
+      if (labelIndex >= 0) {
+        const isPpf = /ppf|provident/i.test(cells[labelIndex] ?? '');
+        const numberCell = cells
+          .slice(labelIndex + 1)
+          .find((cell) => DEPOSIT_NUMBER_CELL.test(cell));
+        if (numberCell) {
+          push(isPpf ? ppfAccounts : fixedDeposits, numberCell, text);
+        }
+      }
+    }
+  }
+
+  return { fixedDeposits, ppfAccounts };
+}
+
 function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefined {
   const metadata: ParsedStatementMetadata = {};
   const account = identifyUniqueAccount({ text: markdown });
@@ -1122,6 +1190,10 @@ function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefin
 
   const branch = markdown.match(/(?:branch(?:\s*name)?)[:\s|]+([A-Za-z][A-Za-z .'-]{2,60})/i)?.[1];
   if (branch) metadata.branch = cleanMetadataValue(branch);
+
+  const deposits = extractDepositAccounts(markdown);
+  if (deposits.fixedDeposits.length > 0) metadata.fixedDeposits = deposits.fixedDeposits;
+  if (deposits.ppfAccounts.length > 0) metadata.ppfAccounts = deposits.ppfAccounts;
 
   const period = markdown.match(PERIOD_PATTERN);
   if (period) {

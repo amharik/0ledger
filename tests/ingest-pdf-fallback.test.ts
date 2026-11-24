@@ -130,6 +130,27 @@ describe('Docling PDF extraction', () => {
     expect(mocks.pdfDoclingFromRust).toHaveBeenCalledWith(BYTES, 'secret', { onProgress });
   });
 
+  it('extracts FD and PPF deposit references from a monthly summary', async () => {
+    mocks.pdfDoclingFromRust.mockResolvedValue(
+      docling(`${GOOD_MARKDOWN}
+## Deposits
+| Type | Deposit No. | Principal |
+| --- | --- | --- |
+| Fixed Deposit | 1234567890 | 1,00,000.00 |
+| PPF | XXXX7788 | 50,000.00 |
+`),
+    );
+
+    const statement = await parsePdfStatement(BYTES);
+
+    expect(statement.metadata?.fixedDeposits).toEqual([
+      expect.objectContaining({ numberMasked: '••••7890', tail: '7890' }),
+    ]);
+    expect(statement.metadata?.ppfAccounts).toEqual([
+      expect.objectContaining({ numberMasked: 'XXXX7788', tail: '7788' }),
+    ]);
+  });
+
   it('raises a password error when Docling reports an encrypted PDF', async () => {
     mocks.pdfDoclingFromRust.mockResolvedValue({
       markdown: '',
