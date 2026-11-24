@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
+use docling::{ConvertOptions, DocumentConverter, InputFormat, SourceDocument, WarmPipeline};
+use std::time::SystemTime;
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -507,239 +507,93 @@ fn emit_pdf_progress(
     }
 }
 
-fn parse_percent(line: &str) -> Option<u8> {
-    let index = line.find('%')?;
-    let digits: String = line[..index]
-        .chars()
-        .rev()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse().ok()
-}
 
-fn sanitize_progress_line(line: &str) -> String {
-    let mut output = String::new();
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for next in chars.by_ref() {
-                    if next.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            }
-        } else if !c.is_control() {
-            output.push(c);
-        }
-    }
-    output.trim().to_string()
-}
 
-struct ProgressReader<'a> {
-    callback: &'a Option<PdfProgressCallback>,
-    request_id: &'a str,
-    stage: String,
-    last_percent: u8,
-    last_emit: Instant,
-}
 
-impl<'a> ProgressReader<'a> {
-    fn new(callback: &'a Option<PdfProgressCallback>, request_id: &'a str) -> Self {
-        Self {
-            callback,
-            request_id,
-            stage: String::new(),
-            last_percent: 0,
-            last_emit: Instant::now() - Duration::from_secs(1),
-        }
-    }
 
-    fn handle_line(&mut self, raw: &str) {
-        let line = sanitize_progress_line(raw);
-        if line.is_empty() {
-            return;
-        }
-        let lower = line.to_lowercase();
-        let stage = if lower.contains("loading weights")
-            || lower.contains("fetching model")
-            || lower.contains("initializing pipeline")
-        {
-            "models".to_string()
-        } else if lower.contains("layout") {
-            "layout".to_string()
-        } else if lower.contains("table") {
-            "tables".to_string()
-        } else if lower.contains("ocr") {
-            "ocr".to_string()
-        } else if lower.contains("processing document") {
-            "layout".to_string()
-        } else if lower.contains("finished converting") {
-            "finish".to_string()
-        } else {
-            self.stage.clone()
-        };
-        if stage.is_empty() {
-            return;
-        }
-        self.stage = stage.clone();
 
-        let (base, span) = match stage.as_str() {
-            "models" => (5u16, 10u16),
-            "layout" => (15u16, 40u16),
-            "tables" | "ocr" => (55u16, 30u16),
-            "finish" => (95u16, 4u16),
-            _ => (self.last_percent as u16, 0u16),
-        };
-        let percent = match parse_percent(&line) {
-            Some(value) => (base + (value as u16 * span / 100)).min(99) as u8,
-            None => base as u8,
-        }
-        .max(self.last_percent);
 
-        let now = Instant::now();
-        if percent == self.last_percent
-            && self.stage == stage
-            && now.duration_since(self.last_emit) < Duration::from_millis(250)
-        {
-            return;
-        }
-        self.last_percent = percent;
-        self.last_emit = now;
-        emit_pdf_progress(
-            self.callback,
-            self.request_id,
-            &stage,
-            percent,
-            line.chars().take(240).collect::<String>(),
-        );
-    }
-}
 
-fn read_stream<R: Read>(reader: R, mut on_line: impl FnMut(&str)) -> String {
-    let mut reader = BufReader::new(reader);
-    let mut buffer = [0u8; 8192];
-    let mut pending: Vec<u8> = Vec::new();
-    let mut output = String::new();
-    loop {
-        let read = match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(_) => break,
-        };
-        for &byte in &buffer[..read] {
-            if byte == b'\n' || byte == b'\r' {
-                if !pending.is_empty() {
-                    let line = String::from_utf8_lossy(&pending).to_string();
-                    on_line(&line);
-                    if output.len() < 32_768 {
-                        output.push_str(&line);
-                        output.push('\n');
-                    }
-                    pending.clear();
-                }
-            } else {
-                pending.push(byte);
-                if pending.len() > 32_768 {
-                    pending.clear();
-                }
-            }
-        }
-    }
-    if !pending.is_empty() {
-        let line = String::from_utf8_lossy(&pending).to_string();
-        on_line(&line);
-        if output.len() < 32_768 {
-            output.push_str(&line);
-        }
-    }
-    output
-}
 
-fn run_docling(
-    program: &str,
-    python_module: bool,
-    args: &[String],
-    callback: &Option<PdfProgressCallback>,
-    request_id: &str,
-) -> Result<String, String> {
-    let mut command = Command::new(program);
-    if python_module {
-        command.arg("-m").arg("docling");
-    }
-    command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("{} could not run: {}", program, error))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("{} produced no stderr stream", program))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("{} produced no stdout stream", program))?;
-
-    let stderr_callback = callback.clone();
-    let stderr_request_id = request_id.to_string();
-    let stderr_thread = std::thread::spawn(move || {
-        let mut progress = ProgressReader::new(&stderr_callback, &stderr_request_id);
-        read_stream(stderr, |line| progress.handle_line(line))
-    });
-    let stdout_thread = std::thread::spawn(move || read_stream(stdout, |_| {}));
-
-    let status = child
-        .wait()
-        .map_err(|error| format!("{} wait failed: {}", program, error))?;
-    let stderr_text = stderr_thread.join().unwrap_or_default();
-    let _ = stdout_thread.join();
-    if status.success() {
-        Ok(stderr_text)
+fn docling_converter(needs_ocr: bool) -> Result<DocumentConverter, String> {
+    static NATIVE: OnceLock<Result<DocumentConverter, String>> = OnceLock::new();
+    static OCR: OnceLock<Result<DocumentConverter, String>> = OnceLock::new();
+    if needs_ocr {
+        OCR.get_or_init(|| build_docling_converter(true)).clone()
     } else {
-        Err(format!(
-            "{} exited with {}: {}",
-            program,
-            status,
-            stderr_text.trim().chars().take(2000).collect::<String>()
-        ))
+        NATIVE.get_or_init(|| build_docling_converter(false)).clone()
     }
 }
 
-fn docling_candidates() -> Vec<(String, bool)> {
-    let mut candidates = Vec::new();
-    if let Ok(bin) = std::env::var("DOCLING_BIN") {
-        let bin = bin.trim();
-        if !bin.is_empty() {
-            candidates.push((bin.to_string(), false));
+fn build_docling_converter(needs_ocr: bool) -> Result<DocumentConverter, String> {
+    let mut options = ConvertOptions::default();
+    options.no_ocr = Some(!needs_ocr);
+    if needs_ocr {
+        options.ocr_mode = Some("layout_regions".to_string());
+        options.replace_broken_text_layer = Some(true);
+    }
+    options
+        .apply(DocumentConverter::new())
+        .map(|converter| converter.warm_pipeline(&WarmPipeline::new()))
+        .map_err(|error| format!("Could not configure Docling: {}", error))
+}
+
+fn docling_progress_callback(
+    progress: &Option<PdfProgressCallback>,
+    request_id: &str,
+    needs_ocr: bool,
+) -> Option<docling::ProgressCallback> {
+    let progress = progress.clone()?;
+    let request_id = request_id.to_string();
+    let last_percent = Arc::new(AtomicU8::new(8));
+    Some(Arc::new(move |event: &docling::ProgressEvent| {
+        if let docling::ProgressKind::PageCompleted {
+            completed_pages,
+            total_pages,
+            ..
+        } = &event.kind
+        {
+            if *total_pages == 0 {
+                return;
+            }
+            let ratio = *completed_pages as f32 / *total_pages as f32;
+            let percent = (8.0 + ratio * 91.0).round().clamp(8.0, 99.0) as u8;
+            let previous = last_percent.fetch_max(percent, Ordering::Relaxed);
+            if percent > previous {
+                emit_pdf_progress(
+                    &Some(progress.clone()),
+                    &request_id,
+                    if needs_ocr { "ocr" } else { "extract" },
+                    percent,
+                    format!("Processed {}/{} pages", completed_pages, total_pages),
+                );
+            }
         }
-    }
-    candidates.push(("docling".to_string(), false));
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push((format!("{home}/.local/bin/docling"), false));
-    }
-    candidates.push(("/usr/local/bin/docling".to_string(), false));
-    candidates.push(("/usr/bin/docling".to_string(), false));
-    candidates.push(("python3".to_string(), true));
-    candidates.push(("python".to_string(), true));
-    candidates
+    }))
 }
 
-fn find_markdown_file(root: &Path) -> Option<PathBuf> {
-    WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .map(|entry| entry.into_path())
-        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+fn docling_error(error: &docling::ConversionError) -> (&'static str, String) {
+    if let Some(encryption) = error.encryption() {
+        return match encryption.code() {
+            "password_required" => (
+                "password_required",
+                "This PDF is password protected. Enter the password to continue.".to_string(),
+            ),
+            "wrong_password" => (
+                "invalid_password",
+                "That password did not open the PDF. Check it and try again.".to_string(),
+            ),
+            "not_decryptable" => (
+                "decrypt",
+                format!("This PDF is encrypted in an unsupported way: {}", encryption),
+            ),
+            _ => (
+                "decrypt",
+                format!("This PDF could not be decrypted: {}", encryption),
+            ),
+        };
+    }
+    ("docling", format!("Docling extraction failed: {}", error))
 }
 
 pub fn extract_pdf_with_docling_impl(
@@ -792,70 +646,18 @@ pub fn extract_pdf_with_docling_impl(
         },
     );
 
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!(
-        "0ledger_docling_{}_{}",
-        std::process::id(),
-        stamp
-    ));
-    let output_dir = temp_dir.join("out");
-    fs::create_dir_all(&output_dir)
-        .map_err(|e| format!("Could not create docling temp dir: {}", e))?;
-    let pdf_path = temp_dir.join("statement.pdf");
-    fs::write(&pdf_path, &bytes).map_err(|e| format!("Could not write PDF for docling: {}", e))?;
-
-    let mut args: Vec<String> = vec![
-        "convert".to_string(),
-        pdf_path.to_string_lossy().to_string(),
-        "--from".to_string(),
-        "pdf".to_string(),
-        "--to".to_string(),
-        "md".to_string(),
-        "--output".to_string(),
-        output_dir.to_string_lossy().to_string(),
-        "--tables".to_string(),
-        "--table-mode".to_string(),
-        "accurate".to_string(),
-        "--image-export-mode".to_string(),
-        "placeholder".to_string(),
-    ];
-    if needs_ocr {
-        args.extend([
-            "--ocr".to_string(),
-            "--ocr-mode".to_string(),
-            "layout_regions".to_string(),
-            "--replace-broken".to_string(),
-        ]);
-    } else {
-        args.push("--no-ocr".to_string());
-    }
-
-    let result = (|| {
-        let mut errors = Vec::new();
-        for (program, python_module) in docling_candidates() {
-            match run_docling(&program, python_module, &args, &progress, &request_id) {
-                Ok(_) => {
-                    if let Some(markdown_path) = find_markdown_file(&output_dir) {
-                        return fs::read_to_string(&markdown_path)
-                            .map_err(|e| format!("Could not read docling Markdown: {}", e));
-                    }
-                    errors.push(format!("{} produced no Markdown file", program));
-                }
-                Err(error) => errors.push(error),
-            }
+    let source = SourceDocument::from_bytes("statement.pdf", InputFormat::Pdf, bytes);
+    let converter = match docling_converter(needs_ocr) {
+        Ok(converter) => converter,
+        Err(error) => {
+            emit_pdf_progress(&progress, &request_id, "error", 100, "PDF extraction failed");
+            return Ok(PdfExtractionResult::failed("docling", error));
         }
-        Err(format!(
-            "Docling is not available. Install it with `pip install docling` or set DOCLING_BIN. {}",
-            errors.join(" | ")
-        ))
-    })();
-
-    let _ = fs::remove_dir_all(&temp_dir);
-    match result {
-        Ok(markdown) => {
+    };
+    let callback = docling_progress_callback(&progress, &request_id, needs_ocr);
+    match converter.convert_with_progress(source, 0, callback) {
+        Ok(conversion) => {
+            let markdown = conversion.document.export_to_markdown();
             emit_pdf_progress(
                 &progress,
                 &request_id,
@@ -875,11 +677,11 @@ pub fn extract_pdf_with_docling_impl(
         }
         Err(error) => {
             emit_pdf_progress(&progress, &request_id, "error", 100, "PDF extraction failed");
-            Ok(PdfExtractionResult::failed("docling", error))
+            let (code, message) = docling_error(&error);
+            Ok(PdfExtractionResult::failed(code, message))
         }
     }
 }
-
 pub fn save_email_file_impl(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&req.bytes_base64)
@@ -1384,9 +1186,10 @@ mod tests {
 
     /// Manual end-to-end check against a real or synthetic statement. Set
     /// `ZERO_LEDGER_TEST_PDF` (and optionally `ZERO_LEDGER_TEST_PDF_PASSWORD`)
-    /// and run with `--ignored` on a machine that has the Docling CLI.
+    /// and run with `--ignored` on a machine with the Docling models available
+    /// (bundled under `resources/models` or via `DOCLING_RS_MODELS_DIR`).
     #[test]
-    #[ignore = "requires the Docling CLI and a statement PDF"]
+    #[ignore = "requires Docling models and a statement PDF"]
     fn test_extract_pdf_with_docling_end_to_end() {
         let path = std::env::var("ZERO_LEDGER_TEST_PDF")
             .expect("set ZERO_LEDGER_TEST_PDF to a statement PDF");
@@ -1422,13 +1225,6 @@ mod tests {
         if let Ok(path) = std::env::var("ZERO_LEDGER_TEST_MARKDOWN_OUT") {
             fs::write(path, &result.markdown).expect("could not write extracted Markdown");
         }
-    }
-
-    #[test]
-    fn test_parse_percent_from_docling_progress() {
-        assert_eq!(parse_percent("Layout:  42%|####      | 4/10"), Some(42));
-        assert_eq!(parse_percent("Loading weights: 100%"), Some(100));
-        assert_eq!(parse_percent("no progress here"), None);
     }
 
     #[test]

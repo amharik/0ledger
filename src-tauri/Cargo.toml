@@ -20,6 +20,7 @@ sha2 = "0.10"
 base64 = "0.22"
 lopdf = "0.45"
 pdf-inspector = "1.27"
+docling = { version = "=2.86.14", default-features = false, features = ["pdf"] }
 imap = "2.4"
 native-tls = "0.2"
 chrono = "0.4"

@@ -7,6 +7,7 @@ mod engine_commands;
 use commands::*;
 use engine_commands::*;
 use tauri::Emitter;
+use tauri::Manager;
 
 #[tauri::command]
 fn get_default_folders() -> FolderDefaults {
@@ -104,9 +105,30 @@ async fn keyring_delete_credential(service: String, account: String) -> Result<(
     .map_err(|e| format!("Keyring delete task error: {}", e))?
 }
 
+fn configure_docling_models(app: &tauri::AppHandle) {
+    if std::env::var_os("DOCLING_RS_MODELS_DIR").is_some() {
+        return;
+    }
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("resources").join("models"));
+    }
+    candidates.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("models"),
+    );
+    for models in candidates {
+        if models.is_dir() {
+            std::env::set_var("DOCLING_RS_MODELS_DIR", models);
+            return;
+        }
+    }
+}
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            configure_docling_models(app.handle());
             engine_commands::init(app)?;
             Ok(())
         })

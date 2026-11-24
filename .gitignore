@@ -41,3 +41,7 @@ coverage/
 # local data & fixtures
 fixtures/incoming/
 *.local.json
+
+# bundled docling model weights (fetched by scripts/fetch-docling-models.sh)
+src-tauri/resources/models/*
+!src-tauri/resources/models/.gitkeep
