@@ -369,43 +369,62 @@ impl PdfUnlockError {
 /// the UI can prompt instead of surfacing a raw decryption failure.
 fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnlockError> {
     let supplied = password.unwrap_or("");
-    let mut document = match lopdf::Document::load_mem_with_options(
-        bytes,
-        lopdf::LoadOptions::with_password(supplied),
-    ) {
-        Ok(document) => document,
-        Err(lopdf::Error::InvalidPassword) => {
+    let mut candidates: Vec<&str> = Vec::new();
+    if !supplied.is_empty() {
+        candidates.push(supplied);
+        let trimmed = supplied.trim();
+        if trimmed != supplied && !trimmed.is_empty() {
+            candidates.push(trimmed);
+        }
+    }
+    // Empty user password: a statement can be owner-password-only while the
+    // bank still advertises a password, and pasted passwords often carry
+    // stray whitespace. Try the safe candidates before rejecting the input.
+    candidates.push("");
+
+    let mut structural_error: Option<lopdf::Error> = None;
+    let mut loaded = None;
+    for candidate in candidates {
+        match lopdf::Document::load_mem_with_options(
+            bytes,
+            lopdf::LoadOptions::with_password(candidate),
+        ) {
+            Ok(document) => {
+                loaded = Some(document);
+                break;
+            }
+            Err(lopdf::Error::InvalidPassword) => {}
+            Err(error) => {
+                if structural_error.is_none() {
+                    structural_error = Some(error);
+                }
+            }
+        }
+    }
+    let mut document = match loaded {
+        Some(document) => document,
+        None => {
+            if let Some(error) = structural_error {
+                let encrypted = lopdf::Document::load_mem(bytes)
+                    .map(|document| document.is_encrypted())
+                    .unwrap_or(false);
+                if !encrypted {
+                    return Err(PdfUnlockError::Unreadable(error.to_string()));
+                }
+            }
             return Err(if supplied.is_empty() {
                 PdfUnlockError::PasswordRequired
             } else {
                 PdfUnlockError::InvalidPassword
             });
         }
-        Err(error) => {
-            // Some encrypted files fail a structural load without a password.
-            // If a bare load still reports encryption, ask for the password.
-            let encrypted = lopdf::Document::load_mem(bytes)
-                .map(|document| document.is_encrypted())
-                .unwrap_or(false);
-            return Err(if encrypted {
-                if supplied.is_empty() {
-                    PdfUnlockError::PasswordRequired
-                } else {
-                    PdfUnlockError::InvalidPassword
-                }
-            } else {
-                PdfUnlockError::Unreadable(error.to_string())
-            });
-        }
     };
-
-    // The loader removes /Encrypt after a successful decrypt, so `is_encrypted`
-    // is false for both a plain PDF and a just-decrypted one. `was_encrypted`
+    // The loader removes /Encrypt after a successful decrypt, so is_encrypted
+    // is false for both a plain PDF and a just-decrypted one. was_encrypted
     // tells them apart: only a plain PDF can be passed through untouched.
     if !document.is_encrypted() && !document.was_encrypted() {
         return Ok(bytes.to_vec());
     }
-
     // Safety net for files that keep the /Encrypt dictionary around after
     // decryption; Docling must receive a clean, unencrypted PDF.
     if let Ok(encrypt_ref) = document
@@ -417,14 +436,12 @@ fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnloc
     }
     document.trailer.remove(b"Encrypt");
     document.encryption_state = None;
-
     let mut output = Vec::new();
     document
         .save_to(&mut output)
         .map_err(|error| PdfUnlockError::Unreadable(format!("Could not serialize decrypted PDF: {}", error)))?;
     Ok(output)
 }
-
 #[derive(Debug, Clone)]
 struct TextLayerInfo {
     page_count: u32,
@@ -1084,6 +1101,47 @@ mod tests {
         let document = lopdf::Document::load_mem(&decrypted).expect("loads decrypted PDF");
         assert!(!document.is_encrypted());
 
+        // AES-256 owner-only (empty user password) must open without a prompt.
+        let aes_owner = include_bytes!("../../tests/fixtures/bank-table-aes256-owner.pdf");
+        // An unrelated supplied password must not block an owner-only PDF.
+        let opened = decrypt_pdf(aes_owner, Some("bank-advertised-but-not-owner"))
+            .expect("owner-only AES-256 opens with a stray password");
+        assert!(!lopdf::Document::load_mem(&opened).unwrap().is_encrypted());
+        let opened = decrypt_pdf(aes_owner, None).expect("owner-only AES-256 opens");
+        assert!(!lopdf::Document::load_mem(&opened).unwrap().is_encrypted());
+        // AES-256 (R6) PDFs must accept the correct user password too.
+        let aes256 = include_bytes!("../../tests/fixtures/bank-table-aes256.pdf");
+        assert!(matches!(
+            decrypt_pdf(aes256, None),
+            Err(PdfUnlockError::PasswordRequired)
+        ));
+        assert!(matches!(
+            decrypt_pdf(aes256, Some("wrong")),
+            Err(PdfUnlockError::InvalidPassword)
+        ));
+        let decrypted = decrypt_pdf(aes256, Some("0ledger-aes")).expect("decrypts AES-256");
+        let document =
+            lopdf::Document::load_mem(&decrypted).expect("loads decrypted AES-256 PDF");
+        assert!(!document.is_encrypted());
+        let decrypted_owner =
+            decrypt_pdf(aes256, Some("0ledger-owner")).expect("owner password opens AES-256");
+        assert!(!lopdf::Document::load_mem(&decrypted_owner).unwrap().is_encrypted());
+        // Pasted passwords often carry leading/trailing whitespace.
+        let opened = decrypt_pdf(aes256, Some("  0ledger-aes  ")).expect("trims whitespace");
+        assert!(!lopdf::Document::load_mem(&opened).unwrap().is_encrypted());
+        // A wrong password on a real user-password PDF is still rejected.
+        assert!(matches!(
+            decrypt_pdf(aes256, Some("definitely-wrong")),
+            Err(PdfUnlockError::InvalidPassword)
+        ));
+        // R=5 (AESv3, deprecated) must still decrypt with the right password.
+        let aes_r5 = include_bytes!("../../tests/fixtures/bank-table-aes-r5.pdf");
+        let decrypted = decrypt_pdf(aes_r5, Some("0ledger-aes")).expect("decrypts R5 AES");
+        assert!(!lopdf::Document::load_mem(&decrypted).unwrap().is_encrypted());
+        // Non-ASCII (UTF-8) passwords must match the R6 SASLprep path.
+        let aes_unicode = include_bytes!("../../tests/fixtures/bank-table-aes256-unicode.pdf");
+        let decrypted = decrypt_pdf(aes_unicode, Some("pässwörd")).expect("decrypts UTF-8 password");
+        assert!(!lopdf::Document::load_mem(&decrypted).unwrap().is_encrypted());
         // Owner-password-only PDFs (empty user password) open without prompting.
         let opened = decrypt_pdf(owner_only, None).expect("owner-only opens");
         let document = lopdf::Document::load_mem(&opened).expect("loads owner-only PDF");
