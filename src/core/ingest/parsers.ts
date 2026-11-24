@@ -3,13 +3,14 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { parseAmountToMinor } from '@/core/money/money';
 import { detectStatementAdapter, getAdapter } from './adapters';
 import { parseSpecializedStatement } from './specialized';
-import { pdfMarkdownFromRust, pdfOcrFromDocling } from './pdf-rust';
 import {
-  MAX_PDF_PAGES,
-  assertByteLimit,
-  assertRowLimit,
-  assertTextLimit,
-} from './limits';
+  pdfLayoutFromRust,
+  pdfMarkdownFromRust,
+  pdfOcrFromDocling,
+  type PdfTextItem,
+} from './pdf-rust';
+import { MAX_PDF_PAGES, assertByteLimit, assertRowLimit, assertTextLimit } from './limits';
+import { verifyStatementBalance, type BalanceLine } from './balance';
 import type {
   ParsedStatement,
   ParsedStatementRow,
@@ -61,6 +62,10 @@ const ROLE_ALIASES: Record<Role, string[]> = {
     'outflow amount',
     'outflow amt',
     'debits',
+    'withdrawals',
+    'withdrawals amt',
+    'withdrawals amount',
+    'withdrawal amt',
   ],
   credit: [
     'deposit amt',
@@ -76,6 +81,9 @@ const ROLE_ALIASES: Record<Role, string[]> = {
     'inflow amount',
     'inflow amt',
     'credits',
+    'deposits',
+    'deposits amt',
+    'deposits amount',
   ],
   amount: ['transaction amount', 'txn amount', 'amount inr', 'amount'],
   balance: ['closing balance', 'available balance', 'running balance', 'balance'],
@@ -136,6 +144,45 @@ function normalizeYear(value: string): number {
   return year;
 }
 
+function matchStatementDate(text: string): { date: string; length: number } | undefined {
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    const date = validDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+    if (date) return { date, length: iso[0].length };
+  }
+
+  const dmy = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
+  if (dmy) {
+    const date = validDate(normalizeYear(dmy[3] ?? ''), Number(dmy[2]), Number(dmy[1]));
+    if (date) return { date, length: dmy[0].length };
+  }
+
+  const compactDMonY = text.match(/^(\d{1,2})([A-Za-z]{3,9})(\d{2,4})(?![0-9])/);
+  if (compactDMonY) {
+    const month = MONTHS[(compactDMonY[2] ?? '').toLowerCase()];
+    const date = month
+      ? validDate(normalizeYear(compactDMonY[3] ?? ''), month, Number(compactDMonY[1]))
+      : undefined;
+    if (date) return { date, length: compactDMonY[0].length };
+  }
+
+  const dMonY = text.match(/^(\d{1,2})[\s-]+([A-Za-z]{3,9})[\s,-]+(\d{2,4})/);
+  if (dMonY) {
+    const month = MONTHS[(dMonY[2] ?? '').toLowerCase()];
+    const date = month ? validDate(normalizeYear(dMonY[3] ?? ''), month, Number(dMonY[1])) : undefined;
+    if (date) return { date, length: dMonY[0].length };
+  }
+
+  const monDY = text.match(/^([A-Za-z]{3,9})[\s-]+(\d{1,2})[\s,-]+(\d{2,4})/);
+  if (monDY) {
+    const month = MONTHS[(monDY[1] ?? '').toLowerCase()];
+    const date = month ? validDate(normalizeYear(monDY[3] ?? ''), month, Number(monDY[2])) : undefined;
+    if (date) return { date, length: monDY[0].length };
+  }
+
+  return undefined;
+}
+
 export function parseStatementDate(value: unknown): string | undefined {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return `${value.getUTCFullYear()}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`;
@@ -150,26 +197,7 @@ export function parseStatementDate(value: unknown): string | undefined {
 
   const text = String(value ?? '').trim();
   if (text.length === 0) return undefined;
-
-  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) return validDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
-
-  const dmy = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
-  if (dmy) return validDate(normalizeYear(dmy[3] ?? ''), Number(dmy[2]), Number(dmy[1]));
-
-  const dMonY = text.match(/^(\d{1,2})[\s-]+([A-Za-z]{3,9})[\s,-]+(\d{2,4})/);
-  if (dMonY) {
-    const month = MONTHS[(dMonY[2] ?? '').toLowerCase()];
-    if (month) return validDate(normalizeYear(dMonY[3] ?? ''), month, Number(dMonY[1]));
-  }
-
-  const monDY = text.match(/^([A-Za-z]{3,9})[\s-]+(\d{1,2})[\s,-]+(\d{2,4})/);
-  if (monDY) {
-    const month = MONTHS[(monDY[1] ?? '').toLowerCase()];
-    if (month) return validDate(normalizeYear(monDY[3] ?? ''), month, Number(monDY[2]));
-  }
-
-  return undefined;
+  return matchStatementDate(text)?.date;
 }
 
 const BALANCE_FORWARD =
@@ -313,7 +341,7 @@ function isMarkdownSeparator(line: string): boolean {
 const INLINE_MONTH =
   '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
 const INLINE_DATE = new RegExp(
-  `\\b(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}|\\d{1,2}[\\s-]+${INLINE_MONTH}[\\s,-]+\\d{2,4}|${INLINE_MONTH}[\\s-]+\\d{1,2}[\\s,-]+\\d{2,4})\\b`,
+  `\\b(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}|\\d{1,2}${INLINE_MONTH}\\d{2,4}|\\d{1,2}[\\s-]+${INLINE_MONTH}[\\s,-]+\\d{2,4}|${INLINE_MONTH}[\\s-]+\\d{1,2}[\\s,-]+\\d{2,4})\\b`,
   'gi',
 );
 
@@ -516,7 +544,7 @@ export async function parseXlsxStatement(
 export class ScannedPdfError extends Error {
   readonly requiresOcr = true;
 
-  constructor(message = 'PDF has no text layer. Docling OCR fallback is unavailable.') {
+  constructor(message = 'PDF extraction failed. anydoc and Docling did not produce a statement.') {
     super(message);
     this.name = 'ScannedPdfError';
   }
@@ -524,17 +552,31 @@ export class ScannedPdfError extends Error {
 
 export const OCR_ENABLED = false;
 
-async function pdfText(bytes: ArrayBuffer | Uint8Array, password?: string): Promise<string> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  const data = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes);
-  const loadingTask = pdfjs.getDocument({
-    data,
-    password,
-    useSystemFonts: true,
-  });
+/**
+ * Client-side text extraction with pdf.js. Works in the browser build and in
+ * the desktop webview, handles encrypted PDFs, and acts as a text fallback
+ * before OCR when the native extractors cannot produce a statement.
+ */
+async function pdfTextWithPdfJs(
+  bytes: ArrayBuffer | Uint8Array,
+  password?: string,
+): Promise<string | undefined> {
+  let loadingTask: { promise: Promise<unknown>; destroy: () => Promise<void> } | undefined;
   try {
-    const doc = await loadingTask.promise;
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    const data = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes);
+    loadingTask = pdfjs.getDocument({
+      data,
+      ...(password ? { password } : {}),
+      useSystemFonts: true,
+    }) as unknown as { promise: Promise<unknown>; destroy: () => Promise<void> };
+    const doc = (await loadingTask.promise) as {
+      numPages: number;
+      getPage: (page: number) => Promise<{
+        getTextContent: () => Promise<{ items: Array<Record<string, unknown>> }>;
+      }>;
+    };
     if (doc.numPages > MAX_PDF_PAGES) {
       throw new Error(`PDF has too many pages (max ${MAX_PDF_PAGES})`);
     }
@@ -546,7 +588,7 @@ async function pdfText(bytes: ArrayBuffer | Uint8Array, password?: string): Prom
         .flatMap((item) => {
           if (!('str' in item) || !('transform' in item)) return [];
           const transform = item.transform as number[];
-          return [{ text: item.str, x: transform[4] ?? 0, y: transform[5] ?? 0 }];
+          return [{ text: String(item.str ?? ''), x: transform[4] ?? 0, y: transform[5] ?? 0 }];
         })
         .sort((a, b) => b.y - a.y || a.x - b.x);
       const byLine = new Map<number, string[]>();
@@ -562,14 +604,21 @@ async function pdfText(bytes: ArrayBuffer | Uint8Array, password?: string): Prom
       if (pageNumber < doc.numPages) lines.push(PAGE_BREAK);
     }
     return lines.join('\n');
+  } catch {
+    return undefined;
   } finally {
-    await loadingTask.destroy();
+    try {
+      await loadingTask?.destroy();
+    } catch {
+      // Ignore teardown failures; the extraction result is already decided.
+    }
   }
 }
 
+
 const PAGE_BREAK = '\u000c';
 const DATE_START =
-  /^(?:[*-]\s*)?(?:\d{1,4}\s+)?(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[\s-]+[A-Za-z]{3,9}[\s,-]+\d{2,4}|[A-Za-z]{3,9}[\s-]+\d{1,2}[\s,-]+\d{2,4})\b/;
+  /^(?:[*-]\s*)?(?:\d{1,4}\s+)?(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[A-Za-z]{3,9}\d{2,4}(?![0-9])|\d{1,2}[\s-]+[A-Za-z]{3,9}[\s,-]+\d{2,4}|[A-Za-z]{3,9}[\s-]+\d{1,2}[\s,-]+\d{2,4})\b/;
 const TEXT_AMOUNT =
   /(?:(?:₹|inr|rs\.?)\s*)?\(?-?\d[\d,]*(?:\.\d{1,2})?\)?\s*(?:cr|dr)?/gi;
 const NOISE_LINE = [
@@ -771,39 +820,409 @@ export function parseMarkdownStatement(
   };
 }
 
+interface LayoutLine {
+  page: number;
+  y: number;
+  items: PdfTextItem[];
+  text: string;
+}
+
+interface LayoutPosition {
+  x: number;
+  end: number;
+}
+
+type LayoutRoles = Partial<Record<Role, LayoutPosition>>;
+
+const LAYOUT_AMOUNT_TOKEN =
+  /^(?:₹|inr|rs\.?)?\s*\(?-?\d[\d,]*(?:\.\d{1,2})?\)?\s*(?:cr|dr)?$/i;
+
+function buildLayoutLines(items: PdfTextItem[]): LayoutLine[] {
+  const ordered = [...items].sort((a, b) => a.page - b.page || b.y - a.y || a.x - b.x);
+  const lines: LayoutLine[] = [];
+  let current: LayoutLine | undefined;
+
+  for (const item of ordered) {
+    const tolerance = Math.max(1.5, Math.min(3, (item.height || 8) * 0.45));
+    if (!current || current.page !== item.page || Math.abs(current.y - item.y) > tolerance) {
+      current = { page: item.page, y: item.y, items: [], text: '' };
+      lines.push(current);
+    }
+    current.items.push(item);
+  }
+
+  for (const line of lines) {
+    line.items.sort((a, b) => a.x - b.x);
+    line.text = line.items
+      .map((item) => item.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  return lines;
+}
+
+function roleForHeaderToken(token: string): Role | undefined {
+  for (const [role, aliases] of Object.entries(ROLE_ALIASES) as Array<[Role, string[]]>) {
+    for (const rawAlias of aliases) {
+      const alias = normalizeHeader(rawAlias);
+      if (token === alias || token.startsWith(`${alias} `) || token.endsWith(` ${alias}`)) {
+        return role;
+      }
+    }
+  }
+  return undefined;
+}
+
+function layoutHeaderRoles(line: LayoutLine): LayoutRoles | undefined {
+  const roles: LayoutRoles = {};
+  for (const item of line.items) {
+    for (const match of item.text.matchAll(/\S+/g)) {
+      const token = normalizeHeader(match[0]);
+      if (!token) continue;
+      const role = roleForHeaderToken(token);
+      if (!role || roles[role]) continue;
+      const length = Math.max(1, item.text.length);
+      const start = (match.index ?? 0) / length;
+      const end = ((match.index ?? 0) + match[0].length) / length;
+      roles[role] = { x: item.x + item.width * start, end: item.x + item.width * end };
+    }
+  }
+
+  // A header never carries a transaction date in its leading columns. This
+  // guards against prose lines that happen to contain words like "balance".
+  const dateLimit =
+    roles.description?.x ??
+    Math.min(
+      ...[roles.debit?.x, roles.credit?.x, roles.amount?.x, roles.balance?.x].filter(
+        (value): value is number => value !== undefined,
+      ),
+    );
+  if (
+    Number.isFinite(dateLimit) &&
+    line.items.some((item) => item.x < dateLimit && parseStatementDate(item.text.trim()))
+  ) {
+    return undefined;
+  }
+
+  let score = Object.keys(roles).length;
+  if (!roles.date && !roles.valueDate) score -= 3;
+  if (!roles.description) score -= 1;
+  if (!roles.debit && !roles.credit && !roles.amount) score -= 2;
+  return score >= 3 ? roles : undefined;
+}
+
+function layoutAmountRole(x: number, roles: LayoutRoles): Role | undefined {
+  const useSplitColumns = Boolean(roles.debit || roles.credit);
+  const candidates: Array<{ role: Role; position: LayoutPosition }> = [];
+  if (useSplitColumns) {
+    if (roles.credit) candidates.push({ role: 'credit', position: roles.credit });
+    if (roles.debit) candidates.push({ role: 'debit', position: roles.debit });
+  } else if (roles.amount) {
+    candidates.push({ role: 'amount', position: roles.amount });
+  }
+  if (roles.balance) candidates.push({ role: 'balance', position: roles.balance });
+  if (candidates.length === 0) return undefined;
+
+  candidates.sort((a, b) => a.position.x - b.position.x);
+  let selected = candidates[0]!.role;
+  for (let index = 1; index < candidates.length; index += 1) {
+    const previous = candidates[index - 1]!;
+    const next = candidates[index]!;
+    const boundary = (previous.position.end + next.position.x) / 2;
+    if (x >= boundary) selected = next.role;
+  }
+  return selected;
+}
+
+function layoutLineDate(
+  line: LayoutLine,
+  roles: LayoutRoles,
+): { date: string; item: PdfTextItem; remainder: string } | undefined {
+  const descriptionStart = roles.description?.x;
+  const dateColumn = roles.date?.x ?? roles.valueDate?.x;
+  const leftmost = line.items.reduce((min, item) => Math.min(min, item.x), Number.POSITIVE_INFINITY);
+  // A row date sits in the leading date column, not in a reference or a
+  // summary cell that merely contains a date. When the header position is
+  // known, use it instead of assuming a fixed column width.
+  const dateLimit = dateColumn === undefined ? leftmost + 30 : dateColumn + 24;
+  for (const item of line.items) {
+    if (descriptionStart !== undefined && item.x >= descriptionStart) continue;
+    if (item.x > dateLimit) continue;
+    const text = item.text.trim();
+    const match = matchStatementDate(text);
+    if (match) {
+      return { date: match.date, item, remainder: text.slice(match.length).trim() };
+    }
+  }
+  return undefined;
+}
+
+function isLayoutNoiseLine(text: string): boolean {
+  return (
+    isNoiseLine(text) ||
+    /^\d+\s+of\s+\d+\b/i.test(text) ||
+    /^page\s+\d+\b/i.test(text)
+  );
+}
+
+function isLayoutSectionBreak(text: string): boolean {
+  return /^(?:summary\b|statement of\b|account details\b|account holders?\b|fixed deposits?\b|deposits linked\b|other information\b|nominee\b|please note\b|this is a computer[- ]generated\b)/i.test(
+    text,
+  );
+}
+
+export function parsePositionedStatement(
+  items: PdfTextItem[],
+  options: ParseStatementOptions = {},
+): ParsedStatement {
+  const adapter = resolveAdapter(
+    items
+      .map((item) => item.text)
+      .join(' ')
+      .slice(0, 200_000),
+    options,
+  );
+  const lines = buildLayoutLines(items);
+  const rows: ParsedStatementRow[] = [];
+  let roles: LayoutRoles | undefined;
+  let current: { page: number; date: string; lines: LayoutLine[] } | undefined;
+  let openingBalanceMinor: number | undefined;
+  let closingBalanceMinor: number | undefined;
+
+  const finishBlock = () => {
+    if (!current || !roles) return;
+    const block = current;
+    current = undefined;
+    const amountRoles: Role[] = ['credit', 'debit', 'amount', 'balance'];
+    const amountStart = Math.min(
+      ...amountRoles
+        .map((role) => roles?.[role]?.x)
+        .filter((value): value is number => value !== undefined),
+    );
+    const allItems = block.lines.flatMap((line) => line.items);
+    const byRole: Partial<Record<Role, PdfTextItem[]>> = {};
+    for (const item of allItems) {
+      const text = item.text.trim();
+      if (!LAYOUT_AMOUNT_TOKEN.test(text)) continue;
+      const role = layoutAmountRole(item.x, roles);
+      if (!role) continue;
+      (byRole[role] ??= []).push(item);
+    }
+    const rightmost = (role: Role): PdfTextItem | undefined =>
+      (byRole[role] ?? []).slice().sort((a, b) => b.x - a.x)[0];
+
+    const creditItem = rightmost('credit') ?? rightmost('amount');
+    const debitItem = rightmost('debit');
+    let creditMinor = creditItem ? parseStatementAmount(creditItem.text) ?? 0 : 0;
+    let debitMinor = debitItem ? parseStatementAmount(debitItem.text) ?? 0 : 0;
+
+    if (amountSide(creditItem?.text ?? '') === 'debit' && !debitItem) {
+      debitMinor = creditMinor;
+      creditMinor = 0;
+    }
+    if (amountSide(debitItem?.text ?? '') === 'credit' && !creditItem) {
+      creditMinor = debitMinor;
+      debitMinor = 0;
+    }
+
+    const balanceItem = rightmost('balance');
+    const balanceMinor = balanceItem ? parseStatementAmount(balanceItem.text) : undefined;
+
+    const description = allItems
+      .filter((item) => {
+        const text = item.text.trim();
+        if (amountStart !== Number.POSITIVE_INFINITY && item.x >= amountStart - 1) return false;
+        if (LAYOUT_AMOUNT_TOKEN.test(text)) return false;
+        if (parseStatementDate(text)) return false;
+        return true;
+      })
+      .sort((a, b) => a.page - b.page || b.y - a.y || a.x - b.x)
+      .map((item) => item.text.trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!description && !balanceItem) return;
+    const normalizedDescription = description.toLowerCase();
+    const isClosing =
+      /^(?:closing balance|balance c\/f|c\/f|carried forward)\b/i.test(description) ||
+      normalizedDescription.includes('closing balance');
+    const isOpening = !isClosing && isBalanceForwardDescription(description);
+    if (isOpening || isClosing) {
+      if (balanceMinor !== undefined) {
+        if (isOpening && openingBalanceMinor === undefined) openingBalanceMinor = balanceMinor;
+        if (isClosing) closingBalanceMinor = balanceMinor;
+      }
+      return;
+    }
+
+    if (debitMinor === 0 && creditMinor === 0) return;
+    if (amountStart === Number.POSITIVE_INFINITY && !description) return;
+
+    const raw: Record<string, unknown> = { page: block.page, layout: true };
+    const row: ParsedStatementRow = {
+      date: block.date,
+      description: description || 'Statement line',
+      debitMinor,
+      creditMinor,
+      page: block.page,
+      currency: options.currency ?? 'INR',
+      raw,
+    };
+    if (balanceMinor !== undefined) row.balanceMinor = balanceMinor;
+    rows.push(row);
+    assertRowLimit(rows.length, 'PDF statement');
+  };
+
+  for (const line of lines) {
+    const header = layoutHeaderRoles(line);
+    if (header) {
+      finishBlock();
+      roles = header;
+      continue;
+    }
+    if (!roles) continue;
+    const dateHit = layoutLineDate(line, roles);
+    if (dateHit) {
+      finishBlock();
+      // A bank may emit the date and the narration as one text run. Keep the
+      // remainder so the transaction description is not lost.
+      const items = line.items.flatMap((item) => {
+        if (item !== dateHit.item) return [item];
+        return dateHit.remainder ? [{ ...item, text: dateHit.remainder }] : [];
+      });
+      current = {
+        page: line.page,
+        date: dateHit.date,
+        lines: [
+          {
+            ...line,
+            items,
+            text: items
+              .map((item) => item.text)
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim(),
+          },
+        ],
+      };
+      continue;
+    }
+    if (current && (isLayoutSectionBreak(line.text) || line.page !== current.page)) {
+      finishBlock();
+      continue;
+    }
+    if (current && !isLayoutNoiseLine(line.text)) current.lines.push(line);
+  }
+  finishBlock();
+
+  const statement = statementFromRows(rows, adapter, options);
+  if (openingBalanceMinor !== undefined) statement.openingBalanceMinor = openingBalanceMinor;
+  if (closingBalanceMinor !== undefined) statement.closingBalanceMinor = closingBalanceMinor;
+  return statement;
+}
+
+function parseExtractedPdfMarkdown(
+  markdown: string,
+  options: ParseStatementOptions,
+): ParsedStatement {
+  const adapter = resolveAdapter(markdown, options);
+  if (['nps', 'ppf', 'interest', 'p2p'].includes(adapter.kind)) {
+    const specialized = parseSpecializedStatement(markdown, {
+      fileName: options.fileName,
+      kind: adapter.kind,
+    });
+    if (specialized && specialized.rows.length > 0) return specialized;
+  }
+  return parseMarkdownStatement(markdown, options);
+}
+
+type BalanceStatus = 'verified' | 'unverifiable' | 'mismatch';
+
+function balanceStatus(statement: ParsedStatement): BalanceStatus {
+  if (statement.rows.length === 0) return 'mismatch';
+  const lines: BalanceLine[] = statement.rows.map((row, index) => ({
+    lineNo: index + 1,
+    date: row.date,
+    description: row.description,
+    debitMinor: row.debitMinor,
+    creditMinor: row.creditMinor,
+    balanceMinor: row.balanceMinor,
+    page: row.page,
+  }));
+  const assertion = verifyStatementBalance(lines, {
+    openingBalanceMinor: statement.openingBalanceMinor,
+    closingBalanceMinor: statement.closingBalanceMinor,
+  });
+  if (assertion.mismatches.length > 0) return 'mismatch';
+  // Rows without any balance carry no arithmetic evidence, so a "clean"
+  // assertion would be vacuous. Verified extraction needs a real check.
+  return assertion.checked > 0 || assertion.closingDifferenceMinor !== undefined
+    ? 'verified'
+    : 'unverifiable';
+}
+
 export async function parsePdfStatement(
   bytes: ArrayBuffer | Uint8Array,
   options: ParseStatementOptions & { password?: string } = {},
 ): Promise<ParsedStatement> {
   assertByteLimit(bytes, 'PDF');
-  if (!options.password) {
-    const markdown = await pdfMarkdownFromRust(bytes);
-    if (markdown) {
-      const parsed = parseMarkdownStatement(markdown, options);
-      if (parsed.rows.length > 0) return parsed;
-    }
+
+  const anydoc = await pdfMarkdownFromRust(bytes, options.password);
+  const anydocParsed = anydoc.markdown ? parseExtractedPdfMarkdown(anydoc.markdown, options) : undefined;
+  const anydocStatus =
+    anydocParsed && anydocParsed.rows.length > 0 ? balanceStatus(anydocParsed) : undefined;
+  if (anydocParsed && anydocStatus === 'verified') return anydocParsed;
+
+  // Borderless statement tables are often flattened by generic Markdown
+  // conversion. Positioned runs preserve the debit/credit/balance columns
+  // without the cost of OCR.
+  const layout = await pdfLayoutFromRust(bytes, options.password);
+  const layoutParsed =
+    Array.isArray(layout.items) && layout.items.length > 0
+      ? parsePositionedStatement(layout.items, options)
+      : undefined;
+  const layoutStatus =
+    layoutParsed && layoutParsed.rows.length > 0 ? balanceStatus(layoutParsed) : undefined;
+  if (layoutParsed && layoutStatus === 'verified') return layoutParsed;
+
+  // A statement with no balance column cannot be proven arithmetically.
+  // Prefer the default converter, then layout geometry, and skip OCR.
+  if (anydocParsed && anydocStatus === 'unverifiable') return anydocParsed;
+  if (layoutParsed && layoutStatus === 'unverifiable') return layoutParsed;
+
+  // pdf.js text extraction works in the browser build and covers encrypted
+  // PDFs when the native extractors cannot read them.
+  const pdfJsText = await pdfTextWithPdfJs(bytes, options.password);
+  const pdfJsParsed = pdfJsText ? parseTextStatement(pdfJsText, options) : undefined;
+  const pdfJsStatus =
+    pdfJsParsed && pdfJsParsed.rows.length > 0 ? balanceStatus(pdfJsParsed) : undefined;
+  if (pdfJsParsed && pdfJsStatus === 'verified') return pdfJsParsed;
+
+  const docling = await pdfOcrFromDocling(bytes, options.password);
+  if (docling.markdown) {
+    const parsed = parseExtractedPdfMarkdown(docling.markdown, options);
+    if (parsed.rows.length > 0) return parsed;
   }
-  const text = await pdfText(bytes, options.password);
-  if (text.replace(/\s/g, '').length < 20) {
-    const ocr = await pdfOcrFromDocling(bytes);
-    if (ocr.markdown) {
-      const parsed = parseMarkdownStatement(ocr.markdown, options);
-      if (parsed.rows.length > 0) return parsed;
-    }
-    throw new ScannedPdfError(
-      ocr.error
-        ? `PDF has no text layer. Docling OCR failed: ${ocr.error}`
-        : 'PDF has no text layer. Docling OCR returned no statement rows.',
-    );
-  }
-  const adapter = resolveAdapter(text, options);
-  if (['nps', 'ppf', 'interest', 'p2p'].includes(adapter.kind)) {
-    const specialized = parseSpecializedStatement(text, { fileName: options.fileName, kind: adapter.kind });
-    if (specialized && specialized.rows.length > 0) return specialized;
-  }
-  return {
-    ...statementFromRows(parseTextRows(text, adapter, options), adapter, options),
-    ...extractStatementBoundaries(text),
-    sourceText: text,
-  };
+  if (pdfJsParsed && pdfJsParsed.rows.length > 0) return pdfJsParsed;
+
+  const anydocDetail = anydoc.error
+    ? `anydoc${anydoc.code ? ` (${anydoc.code})` : ''} failed: ${anydoc.error}`
+    : anydocParsed && anydocParsed.rows.length > 0
+      ? 'anydoc extracted rows that failed balance verification'
+      : anydoc.markdown
+        ? 'anydoc extracted no statement rows'
+        : 'anydoc returned no output';
+  const layoutDetail = layout.error
+    ? `layout${layout.code ? ` (${layout.code})` : ''} failed: ${layout.error}`
+    : layoutParsed && layoutParsed.rows.length > 0
+      ? `layout extracted ${layoutParsed.rows.length} rows that failed balance verification`
+      : 'layout extracted no statement rows';
+  throw new ScannedPdfError(
+    docling.error
+      ? `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling fallback failed: ${docling.error}`
+      : `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling fallback returned no statement rows.`,
+  );
 }

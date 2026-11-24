@@ -1,5 +1,3 @@
-import type { StatementLine } from '@/core/model';
-
 export interface BalanceMismatch {
   lineNo: number;
   date: string;
@@ -23,12 +21,22 @@ export interface BalanceAssertion {
 }
 
 export interface StatementBalanceBoundaries {
-  openingBalanceMinor?: number;
-  closingBalanceMinor?: number;
+  openingBalanceMinor?: number | undefined;
+  closingBalanceMinor?: number | undefined;
+}
+
+export interface BalanceLine {
+  lineNo: number;
+  date: string;
+  description: string;
+  debitMinor: number;
+  creditMinor: number;
+  balanceMinor?: number | undefined;
+  page?: number | undefined;
 }
 
 export function verifyStatementBalance(
-  lines: StatementLine[],
+  lines: BalanceLine[],
   boundaries: StatementBalanceBoundaries = {},
 ): BalanceAssertion {
   // Sort chronologically by date ascending; if dates match, preserve lineNo order
@@ -39,7 +47,7 @@ export function verifyStatementBalance(
   let previousBalance: number | undefined;
   let openingMinor: number | undefined;
   let closingMinor: number | undefined;
-  let lastBalanceLine: StatementLine | undefined;
+  let lastBalanceLine: BalanceLine | undefined;
   let totalDebitsMinor = 0;
   let totalCreditsMinor = 0;
   let checked = 0;

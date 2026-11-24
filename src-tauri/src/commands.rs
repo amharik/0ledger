@@ -62,6 +62,76 @@ pub struct SaveEmailFileRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PdfMarkdownRequest {
     pub bytes_base64: String,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PdfMarkdownResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl PdfMarkdownResult {
+    fn ok(markdown: String) -> Self {
+        Self {
+            markdown: Some(markdown),
+            code: None,
+            error: None,
+        }
+    }
+
+    fn failed(code: &str, error: String) -> Self {
+        Self {
+            markdown: None,
+            code: Some(code.to_string()),
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PdfTextItem {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub page: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PdfLayoutResult {
+    pub items: Vec<PdfTextItem>,
+    pub page_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl PdfLayoutResult {
+    fn ok(items: Vec<PdfTextItem>, page_count: u32) -> Self {
+        Self {
+            items,
+            page_count,
+            code: None,
+            error: None,
+        }
+    }
+
+    fn failed(code: &str, error: String) -> Self {
+        Self {
+            items: Vec::new(),
+            page_count: 0,
+            code: Some(code.to_string()),
+            error: Some(error),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -289,19 +359,82 @@ pub fn organize_accounting_file_impl(req: OrganizeRequest) -> Result<String, Str
     Ok(dest.to_string_lossy().to_string())
 }
 
-pub fn extract_pdf_markdown_impl(req: PdfMarkdownRequest) -> Result<String, String> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&req.bytes_base64)
-        .map_err(|e| format!("Base64 decode error: {}", e))?;
+fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, String> {
+    let Some(password) = password.filter(|value| !value.is_empty()) else {
+        return Ok(bytes.to_vec());
+    };
+    let mut document =
+        lopdf::Document::load_mem_with_options(bytes, lopdf::LoadOptions::with_password(password))
+            .map_err(|error| format!("PDF password or decryption failed: {}", error))?;
+    let mut output = Vec::new();
+    document
+        .save_to(&mut output)
+        .map_err(|error| format!("Could not serialize decrypted PDF: {}", error))?;
+    Ok(output)
+}
 
-    match anydoc::to_markdown_bytes(&bytes, Some(anydoc::Format::Pdf)) {
-        Ok(markdown) => Ok(markdown),
-        Err(anydoc::ConvertError::Encrypted) => Err("PDF is encrypted; provide a password".to_string()),
-        Err(anydoc::ConvertError::NeedsOcr { pages, page_count }) => Err(format!(
-            "PDF pages {:?} of {} need OCR",
-            pages, page_count
-        )),
-        Err(error) => Err(format!("PDF parse error: {}", error)),
+pub fn extract_pdf_markdown_impl(req: PdfMarkdownRequest) -> Result<PdfMarkdownResult, String> {
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&req.bytes_base64) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(PdfMarkdownResult::failed(
+                "decode",
+                format!("Base64 decode error: {}", error),
+            ));
+        }
+    };
+    let decrypted = match decrypt_pdf(&bytes, req.password.as_deref()) {
+        Ok(bytes) => bytes,
+        Err(error) => return Ok(PdfMarkdownResult::failed("decrypt", error)),
+    };
+
+    match anydoc::to_markdown_bytes(&decrypted, Some(anydoc::Format::Pdf)) {
+        Ok(markdown) => Ok(PdfMarkdownResult::ok(markdown)),
+        Err(error) => Ok(PdfMarkdownResult::failed(error.code(), error.to_string())),
+    }
+}
+
+/// Extract positioned text runs. This keeps column geometry intact for
+/// borderless statement tables that a generic Markdown conversion flattens.
+pub fn extract_pdf_layout_impl(req: PdfMarkdownRequest) -> Result<PdfLayoutResult, String> {
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&req.bytes_base64) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(PdfLayoutResult::failed(
+                "decode",
+                format!("Base64 decode error: {}", error),
+            ));
+        }
+    };
+    let decrypted = match decrypt_pdf(&bytes, req.password.as_deref()) {
+        Ok(bytes) => bytes,
+        Err(error) => return Ok(PdfLayoutResult::failed("decrypt", error)),
+    };
+
+    match pdf_inspector::extract_text_with_positions_mem(&decrypted) {
+        Ok(items) => {
+            let mut page_count = 0;
+            let text_items: Vec<PdfTextItem> = items
+                .into_iter()
+                .filter(|item| {
+                    matches!(item.item_type, pdf_inspector::types::ItemType::Text)
+                        && !item.text.trim().is_empty()
+                })
+                .map(|item| {
+                    page_count = page_count.max(item.page);
+                    PdfTextItem {
+                        text: item.text,
+                        x: item.x,
+                        y: item.y,
+                        width: item.width,
+                        height: item.height,
+                        page: item.page,
+                    }
+                })
+                .collect();
+            Ok(PdfLayoutResult::ok(text_items, page_count))
+        }
+        Err(error) => Ok(PdfLayoutResult::failed("pdfInspector", error.to_string())),
     }
 }
 
@@ -336,6 +469,7 @@ pub fn ocr_pdf_with_docling_impl(req: PdfMarkdownRequest) -> Result<String, Stri
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&req.bytes_base64)
         .map_err(|e| format!("Base64 decode error: {}", e))?;
+    let bytes = decrypt_pdf(&bytes, req.password.as_deref())?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -873,11 +1007,47 @@ mod tests {
         let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
         let req = PdfMarkdownRequest {
             bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            password: None,
         };
-        let markdown = extract_pdf_markdown_impl(req).unwrap();
+        let markdown = extract_pdf_markdown_impl(req).unwrap().markdown.unwrap();
         assert!(markdown.contains("2026-10-01"));
         assert!(markdown.contains("UPI PAYMENT"));
         assert!(markdown.contains("SALARY CREDIT"));
+    }
+
+    #[test]
+    fn test_extract_pdf_markdown_with_password_on_unencrypted_pdf() {
+        let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
+        let req = PdfMarkdownRequest {
+            bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            password: Some("unused-password".to_string()),
+        };
+        let markdown = extract_pdf_markdown_impl(req).unwrap().markdown.unwrap();
+        assert!(markdown.contains("UPI PAYMENT"));
+    }
+
+    #[test]
+    fn test_extract_pdf_layout_keeps_table_text() {
+        let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
+        let req = PdfMarkdownRequest {
+            bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            password: Some("unused-password".to_string()),
+        };
+        let result = extract_pdf_layout_impl(req).unwrap();
+        assert!(result.error.is_none());
+        assert!(result.page_count >= 1);
+        assert!(result
+            .items
+            .iter()
+            .any(|item| item.text.contains("UPI PAYMENT")));
+        assert!(result
+            .items
+            .iter()
+            .any(|item| item.text.contains("SALARY CREDIT")));
+        assert!(result
+            .items
+            .iter()
+            .any(|item| item.text.contains("2026-10-01")));
     }
 
     #[test]
