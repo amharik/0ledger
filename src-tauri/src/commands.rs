@@ -367,27 +367,36 @@ impl PdfUnlockError {
 /// Decrypt a PDF in memory. Owner-password-only PDFs (an empty user password)
 /// open without asking; a real user password produces a structured error so
 /// the UI can prompt instead of surfacing a raw decryption failure.
+fn strip_invisible(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'))
+        .collect()
+}
+
 fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnlockError> {
     let supplied = password.unwrap_or("");
-    let mut candidates: Vec<&str> = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
     if !supplied.is_empty() {
-        candidates.push(supplied);
-        let trimmed = supplied.trim();
-        if trimmed != supplied && !trimmed.is_empty() {
-            candidates.push(trimmed);
+        candidates.push(supplied.to_string());
+        let stripped = strip_invisible(supplied);
+        for value in [supplied.trim(), stripped.as_str(), stripped.trim()] {
+            if !value.is_empty() && !candidates.iter().any(|candidate| candidate.as_str() == value) {
+                candidates.push(value.to_string());
+            }
         }
     }
     // Empty user password: a statement can be owner-password-only while the
     // bank still advertises a password, and pasted passwords often carry
     // stray whitespace. Try the safe candidates before rejecting the input.
-    candidates.push("");
+    candidates.push(String::new());
 
     let mut structural_error: Option<lopdf::Error> = None;
     let mut loaded = None;
-    for candidate in candidates {
+    for candidate in &candidates {
         match lopdf::Document::load_mem_with_options(
             bytes,
-            lopdf::LoadOptions::with_password(candidate),
+            lopdf::LoadOptions::with_password(candidate.as_str()),
         ) {
             Ok(document) => {
                 loaded = Some(document);
@@ -1146,6 +1155,68 @@ mod tests {
         let opened = decrypt_pdf(owner_only, None).expect("owner-only opens");
         let document = lopdf::Document::load_mem(&opened).expect("loads owner-only PDF");
         assert!(!document.is_encrypted());
+    }
+
+    #[test]
+    #[ignore = "requires ZERO_LEDGER_TEST_PDF and ZERO_LEDGER_TEST_PDF_PASSWORD"]
+    fn decrypt_path_probe() {
+        let path = std::env::var("ZERO_LEDGER_TEST_PDF").expect("set ZERO_LEDGER_TEST_PDF");
+        let supplied = std::env::var("ZERO_LEDGER_TEST_PDF_PASSWORD").ok();
+        let bytes = std::fs::read(&path).expect("read PDF");
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("?");
+        println!("probe: file={} bytes={}", name, bytes.len());
+        match supplied.as_deref() {
+            Some(value) => {
+                let stripped = strip_invisible(value);
+                println!(
+                    "probe: password_len={} trimmed={} invisible_stripped={}",
+                    value.chars().count(),
+                    value != value.trim(),
+                    stripped != value
+                );
+            }
+            None => println!("probe: password=<none>"),
+        }
+        if let Ok(document) = lopdf::Document::load_mem(&bytes) {
+            if let Ok(object) = document.trailer.get(b"Encrypt") {
+                let dict = match object {
+                    lopdf::Object::Reference(id) => document
+                        .get_object(*id)
+                        .ok()
+                        .and_then(|value| value.as_dict().ok()),
+                    other => other.as_dict().ok(),
+                };
+                if let Some(dict) = dict {
+                    println!(
+                        "probe: encrypt Filter={:?} V={:?} R={:?} Length={:?}",
+                        dict.get(b"Filter"),
+                        dict.get(b"V"),
+                        dict.get(b"R"),
+                        dict.get(b"Length")
+                    );
+                }
+            }
+        } else {
+            println!("probe: bare load failed");
+        }
+        match decrypt_pdf(&bytes, supplied.as_deref()) {
+            Ok(output) => {
+                let pages = lopdf::Document::load_mem(&output)
+                    .map(|document| document.get_pages().len())
+                    .unwrap_or(0);
+                println!(
+                    "probe: result=OK decrypted_bytes={} pages={}",
+                    output.len(),
+                    pages
+                );
+            }
+            Err(PdfUnlockError::PasswordRequired) => println!("probe: result=PasswordRequired"),
+            Err(PdfUnlockError::InvalidPassword) => println!("probe: result=InvalidPassword"),
+            Err(PdfUnlockError::Unreadable(error)) => println!("probe: result=Unreadable {error}"),
+        }
     }
 
     #[test]
