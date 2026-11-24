@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local-first double-entry ledger and tax reconciliation for Indian businesses \u2014 native desktop app powered by Tauri.",
+  "description": "Local-first double-entry ledger and tax reconciliation for Indian businesses — native desktop app powered by Tauri.",
   "license": "MIT",
   "scripts": {
     "postinstall": "wxt prepare",
