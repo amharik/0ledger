@@ -548,6 +548,21 @@ export class ScannedPdfError extends Error {
   }
 }
 
+export class PdfPasswordRequiredError extends Error {
+  readonly code: 'password_required' | 'invalid_password';
+
+  constructor(code: 'password_required' | 'invalid_password', message?: string) {
+    super(
+      message ??
+        (code === 'password_required'
+          ? 'This PDF is password-protected. Enter the password to continue.'
+          : 'That PDF password was not accepted. Check it and try again.'),
+    );
+    this.name = 'PdfPasswordRequiredError';
+    this.code = code;
+  }
+}
+
 const PAGE_BREAK = '\u000c';
 const DATE_START =
   /^(?:[*-]\s*)?(?:\d{1,4}\s+)?(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[A-Za-z]{3,9}\d{2,4}(?![0-9])|\d{1,2}[\s-]+[A-Za-z]{3,9}[\s,-]+\d{2,4}|[A-Za-z]{3,9}[\s-]+\d{1,2}[\s,-]+\d{2,4})\b/;
@@ -1128,6 +1143,9 @@ export async function parsePdfStatement(
   const result = await pdfDoclingFromRust(bytes, options.password, {
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   });
+  if (result.code === 'password_required' || result.code === 'invalid_password') {
+    throw new PdfPasswordRequiredError(result.code, result.error);
+  }
   if (result.error || !result.markdown) {
     throw new ScannedPdfError(
       result.error

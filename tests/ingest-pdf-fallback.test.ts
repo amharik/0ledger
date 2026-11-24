@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/core/ingest/pdf-rust', () => mocks);
 
 import {
+  PdfPasswordRequiredError,
   ScannedPdfError,
   StatementReconciliationError,
   parseMarkdownStatement,
@@ -127,6 +128,40 @@ describe('Docling PDF extraction', () => {
     await parsePdfStatement(BYTES, { password: 'secret', onProgress });
 
     expect(mocks.pdfDoclingFromRust).toHaveBeenCalledWith(BYTES, 'secret', { onProgress });
+  });
+
+  it('raises a password error when Docling reports an encrypted PDF', async () => {
+    mocks.pdfDoclingFromRust.mockResolvedValue({
+      markdown: '',
+      page_count: 0,
+      text_pages: 0,
+      ocr_pages: 0,
+      mode: 'unavailable',
+      code: 'password_required',
+      error: 'This PDF is password-protected. Enter the password to continue.',
+    });
+
+    await expect(parsePdfStatement(BYTES)).rejects.toBeInstanceOf(PdfPasswordRequiredError);
+    await expect(parsePdfStatement(BYTES)).rejects.toMatchObject({
+      code: 'password_required',
+    });
+  });
+
+  it('distinguishes a rejected PDF password', async () => {
+    mocks.pdfDoclingFromRust.mockResolvedValue({
+      markdown: '',
+      page_count: 0,
+      text_pages: 0,
+      ocr_pages: 0,
+      mode: 'unavailable',
+      code: 'invalid_password',
+      error: 'That PDF password was not accepted. Check it and try again.',
+    });
+
+    await expect(parsePdfStatement(BYTES, { password: 'wrong' })).rejects.toMatchObject({
+      name: 'PdfPasswordRequiredError',
+      code: 'invalid_password',
+    });
   });
 
   it('raises a scanned-PDF error when Docling is unavailable', async () => {

@@ -335,17 +335,93 @@ pub fn organize_accounting_file_impl(req: OrganizeRequest) -> Result<String, Str
     Ok(dest.to_string_lossy().to_string())
 }
 
-fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, String> {
-    let Some(password) = password.filter(|value| !value.is_empty()) else {
-        return Ok(bytes.to_vec());
+#[derive(Debug)]
+enum PdfUnlockError {
+    PasswordRequired,
+    InvalidPassword,
+    Unreadable(String),
+}
+
+impl PdfUnlockError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::PasswordRequired => "password_required",
+            Self::InvalidPassword => "invalid_password",
+            Self::Unreadable(_) => "decrypt",
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::PasswordRequired => {
+                "This PDF is password-protected. Enter the password to continue.".to_string()
+            }
+            Self::InvalidPassword => {
+                "That PDF password was not accepted. Check it and try again.".to_string()
+            }
+            Self::Unreadable(error) => format!("Could not read the PDF: {}", error),
+        }
+    }
+}
+
+/// Decrypt a PDF in memory. Owner-password-only PDFs (an empty user password)
+/// open without asking; a real user password produces a structured error so
+/// the UI can prompt instead of surfacing a raw decryption failure.
+fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnlockError> {
+    let supplied = password.unwrap_or("");
+    let mut document = match lopdf::Document::load_mem_with_options(
+        bytes,
+        lopdf::LoadOptions::with_password(supplied),
+    ) {
+        Ok(document) => document,
+        Err(lopdf::Error::InvalidPassword) => {
+            return Err(if supplied.is_empty() {
+                PdfUnlockError::PasswordRequired
+            } else {
+                PdfUnlockError::InvalidPassword
+            });
+        }
+        Err(error) => {
+            // Some encrypted files fail a structural load without a password.
+            // If a bare load still reports encryption, ask for the password.
+            let encrypted = lopdf::Document::load_mem(bytes)
+                .map(|document| document.is_encrypted())
+                .unwrap_or(false);
+            return Err(if encrypted {
+                if supplied.is_empty() {
+                    PdfUnlockError::PasswordRequired
+                } else {
+                    PdfUnlockError::InvalidPassword
+                }
+            } else {
+                PdfUnlockError::Unreadable(error.to_string())
+            });
+        }
     };
-    let mut document =
-        lopdf::Document::load_mem_with_options(bytes, lopdf::LoadOptions::with_password(password))
-            .map_err(|error| format!("PDF password or decryption failed: {}", error))?;
+
+    // The loader removes /Encrypt after a successful decrypt, so `is_encrypted`
+    // is false for both a plain PDF and a just-decrypted one. `was_encrypted`
+    // tells them apart: only a plain PDF can be passed through untouched.
+    if !document.is_encrypted() && !document.was_encrypted() {
+        return Ok(bytes.to_vec());
+    }
+
+    // Safety net for files that keep the /Encrypt dictionary around after
+    // decryption; Docling must receive a clean, unencrypted PDF.
+    if let Ok(encrypt_ref) = document
+        .trailer
+        .get(b"Encrypt")
+        .and_then(|object| object.as_reference())
+    {
+        document.objects.remove(&encrypt_ref);
+    }
+    document.trailer.remove(b"Encrypt");
+    document.encryption_state = None;
+
     let mut output = Vec::new();
     document
         .save_to(&mut output)
-        .map_err(|error| format!("Could not serialize decrypted PDF: {}", error))?;
+        .map_err(|error| PdfUnlockError::Unreadable(format!("Could not serialize decrypted PDF: {}", error)))?;
     Ok(output)
 }
 
@@ -685,7 +761,7 @@ pub fn extract_pdf_with_docling_impl(
     };
     let bytes = match decrypt_pdf(&bytes, req.password.as_deref()) {
         Ok(bytes) => bytes,
-        Err(error) => return Ok(PdfExtractionResult::failed("decrypt", error)),
+        Err(error) => return Ok(PdfExtractionResult::failed(error.code(), error.message())),
     };
 
     emit_pdf_progress(
@@ -1185,6 +1261,31 @@ mod tests {
         assert_eq!(sanitize_path_segment("Acme Traders / Pvt Ltd!"), "Acme_Traders___Pvt_Ltd");
         assert_eq!(sanitize_path_segment("FY2026-27"), "FY2026-27");
         assert_eq!(sanitize_path_segment("2026-11"), "2026-11");
+    }
+
+    #[test]
+    fn test_decrypt_pdf_classifies_passwords() {
+        // Synthetic fixtures; the documented test password is `0ledger-test`.
+        let encrypted = include_bytes!("../../tests/fixtures/bank-table-encrypted.pdf");
+        let owner_only = include_bytes!("../../tests/fixtures/bank-table-owner.pdf");
+
+        assert!(matches!(
+            decrypt_pdf(encrypted, None),
+            Err(PdfUnlockError::PasswordRequired)
+        ));
+        assert!(matches!(
+            decrypt_pdf(encrypted, Some("wrong")),
+            Err(PdfUnlockError::InvalidPassword)
+        ));
+
+        let decrypted = decrypt_pdf(encrypted, Some("0ledger-test")).expect("decrypts");
+        let document = lopdf::Document::load_mem(&decrypted).expect("loads decrypted PDF");
+        assert!(!document.is_encrypted());
+
+        // Owner-password-only PDFs (empty user password) open without prompting.
+        let opened = decrypt_pdf(owner_only, None).expect("owner-only opens");
+        let document = lopdf::Document::load_mem(&opened).expect("loads owner-only PDF");
+        assert!(!document.is_encrypted());
     }
 
     #[test]

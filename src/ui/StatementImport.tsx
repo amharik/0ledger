@@ -3,6 +3,7 @@ import { CheckCircle2, Inbox, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { getDb } from '@/core/db/db';
 import type { ImportBatch, Ledger, StatementLine } from '@/core/model';
 import {
+  PdfPasswordRequiredError,
   commitImportBatch,
   discardImportBatch,
   ingestFile,
@@ -56,6 +57,8 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
   const [showPaste, setShowPaste] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pdfProgress, setPdfProgress] = useState<PdfExtractionProgress>();
+  const [pendingFile, setPendingFile] = useState<File>();
+  const [passwordRequired, setPasswordRequired] = useState(false);
   const [error, setError] = useState<string>();
   const [results, setResults] = useState<StageImportResult[]>([]);
   const [batches, setBatches] = useState<ImportBatch[]>([]);
@@ -118,9 +121,11 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
 
   async function pickFile(file: File | undefined) {
     if (!file) return;
+    setPendingFile(file);
     setBusy(true);
     setError(undefined);
     setPdfProgress(undefined);
+    setPasswordRequired(false);
     if (file.size > MAX_INGEST_BYTES) {
       setError('File exceeds the 25 MB limit.');
       setBusy(false);
@@ -154,8 +159,14 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
         },
       );
       accept(staged);
+      setPendingFile(undefined);
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (cause instanceof PdfPasswordRequiredError) {
+        setPasswordRequired(true);
+        setError(cause.message);
+      } else {
+        setError(errorMessage(cause));
+      }
     } finally {
       setBusy(false);
       setPdfProgress(undefined);
@@ -337,6 +348,22 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
             />
           </div>
         </div>
+
+        {passwordRequired ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/40">
+            <span className="text-amber-800 dark:text-amber-200">
+              This PDF needs a password. Enter it above, then retry.
+            </span>
+            <button
+              type="button"
+              disabled={busy || !password || !pendingFile}
+              onClick={() => void pickFile(pendingFile)}
+              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50"
+            >
+              Retry with password
+            </button>
+          </div>
+        ) : null}
 
         <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-6 py-8 text-center transition-colors hover:border-blue-500 hover:bg-blue-50/30 dark:border-slate-700 dark:bg-slate-950/60 dark:hover:border-blue-500">
           <Upload className="h-5 w-5 text-slate-400" />
