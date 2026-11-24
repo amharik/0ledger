@@ -1299,11 +1299,22 @@ mod tests {
             request_id: Some("test".to_string()),
         };
 
-        let result = extract_pdf_with_docling_impl(req, None).expect("extraction task failed");
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let progress: PdfProgressCallback = Arc::new(move |payload| {
+            sink.lock().unwrap().push(payload);
+        });
+
+        let result = extract_pdf_with_docling_impl(req, Some(progress)).expect("extraction task failed");
         assert!(result.error.is_none(), "extraction error: {:?}", result.error);
         assert!(!result.markdown.is_empty(), "Docling returned no Markdown");
         assert!(result.page_count >= 1);
         assert!(result.text_pages + result.ocr_pages >= 1);
+
+        let events = events.lock().unwrap();
+        assert!(!events.is_empty(), "extraction emitted no progress events");
+        assert!(events.iter().any(|event| event.percent >= 8));
+        assert!(events.iter().all(|event| event.request_id == "test"));
     }
 
     #[test]

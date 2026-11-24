@@ -178,6 +178,7 @@ export async function stageImport(
       ifsc: input.statement.metadata?.ifsc,
       statementFrom: input.statement.metadata?.statementFrom,
       statementTo: input.statement.metadata?.statementTo,
+      repairedRows: input.statement.metadata?.repairedRows,
       committedLines: 0,
       failedLines: 0,
       createdAt: now,

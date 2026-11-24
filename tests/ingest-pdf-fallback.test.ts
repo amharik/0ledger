@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -34,6 +35,13 @@ const GOOD_MARKDOWN = `| Date | Description | Debit | Credit | Balance |
 | 03-10-2026 | SALARY CREDIT |  | 500.00 | 1,400.00 |
 `;
 
+// Captured from Docling 2.x converting a synthetic statement PDF. The source
+// PDF and this output contain no real account or customer data.
+const DOCLING_TABLE_MARKDOWN = readFileSync(
+  new URL('./fixtures/docling-statement.md', import.meta.url),
+  'utf8',
+);
+
 describe('Docling PDF extraction', () => {
   beforeEach(() => {
     mocks.pdfDoclingFromRust.mockReset();
@@ -61,6 +69,41 @@ describe('Docling PDF extraction', () => {
       ocrPages: 0,
     });
     expect(mocks.pdfDoclingFromRust).toHaveBeenCalledWith(BYTES, undefined, {});
+  });
+
+  it('parses a real Docling table, extracts metadata, and reconciles every row', async () => {
+    mocks.pdfDoclingFromRust.mockResolvedValue(docling(DOCLING_TABLE_MARKDOWN));
+
+    const statement = await parsePdfStatement(BYTES);
+
+    expect(statement.rows).toHaveLength(16);
+    expect(statement.openingBalanceMinor).toBe(10_000_000);
+    expect(statement.closingBalanceMinor).toBe(19_470_000);
+    expect(statement.metadata).toMatchObject({
+      accountNumberMasked: '••••7890',
+      accountTail: '7890',
+      accountCategory: 'bank_account',
+      institution: 'HDFC Bank',
+      accountHolder: 'SYNTHETIC TRADERS PVT LTD',
+      ifsc: 'HDFC0001234',
+      branch: 'MG Road',
+      statementFrom: '2026-10-01',
+      statementTo: '2026-10-31',
+      extractor: 'docling-native',
+    });
+    expect(statement.metadata?.repairedRows).toBeUndefined();
+    expect(statement.rows[0]).toMatchObject({
+      date: '2026-10-02',
+      description: 'UPI PAYMENT TO VENDOR',
+      debitMinor: 150_000,
+      creditMinor: 0,
+      balanceMinor: 9_850_000,
+    });
+    expect(statement.rows[15]).toMatchObject({
+      date: '2026-10-30',
+      creditMinor: 1_750_000,
+      balanceMinor: 19_470_000,
+    });
   });
 
   it('records OCR mode when Docling had to fall back to OCR', async () => {

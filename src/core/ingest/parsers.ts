@@ -1033,6 +1033,13 @@ function maskAccountNumber(value: string): { masked: string; tail: string } | un
   return { masked: `••••${digits.slice(-4)}`, tail: digits.slice(-4) };
 }
 
+const METADATA_LABELS =
+  /\s+(?:account\s*(?:no\.?|number|holder)|a\/c|ifsc|branch|customer\s*name|statement\s*(?:period|from)|period)\b.*$/i;
+
+function cleanMetadataValue(value: string): string {
+  return value.replace(METADATA_LABELS, '').replace(/\s+/g, ' ').trim();
+}
+
 function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefined {
   const metadata: ParsedStatementMetadata = {};
   const account = identifyUniqueAccount({ text: markdown });
@@ -1064,10 +1071,10 @@ function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefin
   const holder = markdown.match(
     /(?:account\s*holder(?:\s*name)?|customer\s*name|name\s*of\s*(?:the\s*)?account\s*holder)[:\s|]+([A-Za-z][A-Za-z .'-]{2,80})/i,
   )?.[1];
-  if (holder) metadata.accountHolder = holder.trim().replace(/\s+/g, ' ');
+  if (holder) metadata.accountHolder = cleanMetadataValue(holder);
 
   const branch = markdown.match(/(?:branch(?:\s*name)?)[:\s|]+([A-Za-z][A-Za-z .'-]{2,60})/i)?.[1];
-  if (branch) metadata.branch = branch.trim().replace(/\s+/g, ' ');
+  if (branch) metadata.branch = cleanMetadataValue(branch);
 
   const period =
     markdown.match(

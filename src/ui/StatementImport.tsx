@@ -427,6 +427,9 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
                 {' · '}
                 <span className="num-tabular">{activeBatch.totalLines}</span> lines ·{' '}
                 {activeBatch.status}
+                {activeBatch.repairedRows
+                  ? ` · ${activeBatch.repairedRows} row${activeBatch.repairedRows === 1 ? '' : 's'} repaired`
+                  : ''}
               </p>
               {activeBatch.accountHolder || activeBatch.ifsc ? (
                 <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">

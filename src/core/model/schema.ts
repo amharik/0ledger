@@ -567,6 +567,7 @@ export const ImportBatchSchema = z
     ifsc: z.string().max(11).optional(),
     statementFrom: isoDate.optional(),
     statementTo: isoDate.optional(),
+    repairedRows: z.number().int().nonnegative().optional(),
     committedLines: z.number().int().nonnegative().default(0),
     failedLines: z.number().int().nonnegative().default(0),
     error: longText.optional(),
