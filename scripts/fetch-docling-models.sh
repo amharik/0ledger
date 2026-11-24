@@ -3,6 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest="$repo_root/src-tauri/resources/models"
+if [ -f "$dest/layout_heron.onnx" ] && [ -f "$dest/tableformer/encoder.onnx" ] && [ -z "${DOCLING_FORCE_FETCH:-}" ]; then
+  echo "Docling models already staged at $dest (set DOCLING_FORCE_FETCH=1 to refetch)"
+  exit 0
+fi
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
