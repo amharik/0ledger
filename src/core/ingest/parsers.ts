@@ -461,8 +461,10 @@ function rowsFromTable(
   const rows: ParsedStatementRow[] = [];
   for (let index = header.index + 1; index < table.length; index += 1) {
     const cells = (table[index] ?? []).map(cellText);
-    const joined = cells.join(' ').toLowerCase();
-    if (/statement summary|closing balance|opening balance|end of statement/.test(joined) && !parseStatementDate(cells[header.roles.date ?? -1] ?? '')) {
+    if (
+      isSummaryRow(cells) &&
+      !parseStatementDate(cells[header.roles.date ?? -1] ?? '')
+    ) {
       continue;
     }
     const parsed = rowFromCells(cells, header.roles, headers, adapter, options);
@@ -588,6 +590,11 @@ function textAmountMatches(text: string): RegExpMatchArray[] {
   });
 }
 
+const BOUNDARY_CELL =
+  /^(?:opening balance|balance b\/f|b\/f|brought forward|closing balance|balance c\/f|c\/f|carried forward)[.:;-]*$/i;
+const OPENING_LABEL = /^(?:opening balance|balance b\/f|b\/f|brought forward)\b(?!\s*\()/i;
+const CLOSING_LABEL = /^(?:closing balance|balance c\/f|c\/f|carried forward)\b(?!\s*\()/i;
+
 function extractStatementBoundaries(text: string): {
   openingBalanceMinor?: number;
   closingBalanceMinor?: number;
@@ -600,19 +607,16 @@ function extractStatementBoundaries(text: string): {
     let candidate = line;
     if (line.startsWith('|')) {
       const cells = splitMarkdownRow(line);
-      candidate =
-        cells.find((cell) =>
-          /^(?:opening balance|balance b\/f|b\/f|brought forward|closing balance|balance c\/f|c\/f|carried forward)\b/i.test(
-            cell.trim(),
-          ),
-        ) ?? '';
+      // A boundary cell must be exactly the label. This deliberately ignores
+      // qualified summary rows such as "Closing Balance (Cumulative)".
+      candidate = cells.find((cell) => BOUNDARY_CELL.test(cell.trim())) ?? '';
     } else {
       const dateMatch = line.match(DATE_START);
       if (dateMatch) candidate = line.slice(dateMatch[0].length).trim();
     }
     if (!candidate) continue;
-    const opening = /^(?:opening balance|balance b\/f|b\/f|brought forward)\b/i.test(candidate);
-    const closing = /^(?:closing balance|balance c\/f|c\/f|carried forward)\b/i.test(candidate);
+    const opening = OPENING_LABEL.test(candidate);
+    const closing = CLOSING_LABEL.test(candidate);
     if (!opening && !closing) continue;
     const matches = textAmountMatches(line);
     const last = matches[matches.length - 1];
@@ -726,6 +730,13 @@ function looksLikeAmountCell(value: string): boolean {
   return /^[\s(]*(?:₹|inr|rs\.?)?\s*-?\d[\d,]*(?:\.\d{1,2})?\)?\s*(?:cr|dr)?$/i.test(value.trim());
 }
 
+const SUMMARY_ROW =
+  /^(?:total|grand\s+total|sub\s*total|subtotal|opening\s+balance|closing\s+balance|balance\s+[bc]\/f|statement\s+summary|end\s+of\s+statement)\b/i;
+
+function isSummaryRow(cells: string[]): boolean {
+  return cells.some((cell) => SUMMARY_ROW.test(cell.trim()));
+}
+
 function tableHeaderSignature(table: string[][]): string | undefined {
   const header = findHeader(table);
   if (!header) return undefined;
@@ -748,8 +759,9 @@ function mergeContinuationRows(rows: string[][]): string[][] {
       merged.push([...row]);
       continue;
     }
-    // Never absorb an opening/closing summary row into the last transaction.
-    if (row.some(isBalanceForwardDescription)) {
+    // Never absorb an opening/closing/total summary row into the last
+    // transaction, even when it carries the same number of columns.
+    if (isSummaryRow(row) || row.some(isBalanceForwardDescription)) {
       merged.push([...row]);
       continue;
     }
@@ -1028,10 +1040,26 @@ function formatReconciliationError(outcome: ReconciliationOutcome): string {
 const DEBUG_PDF = import.meta.env.DEV && import.meta.env.MODE !== 'test';
 
 function maskAccountNumber(value: string): { masked: string; tail: string } | undefined {
-  const digits = value.replace(/\D/g, '');
-  if (digits.length < 6) return undefined;
-  return { masked: `••••${digits.slice(-4)}`, tail: digits.slice(-4) };
+  const trimmed = value.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  const alreadyMasked = /[Xx*•]/.test(trimmed);
+  if (digits.length < (alreadyMasked ? 4 : 6)) return undefined;
+  const tail = digits.slice(-4);
+  // Preserve the bank's own masking (for example XXXXXXXX1234) instead of
+  // replacing it with bullets; otherwise mask a full account number.
+  if (alreadyMasked) {
+    return { masked: trimmed.replace(/[\s-]/g, '').replace(/x/g, 'X'), tail };
+  }
+  return { masked: `••••${tail}`, tail };
 }
+
+const MONTH_TOKEN =
+  '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const DATE_TOKEN = `(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}|\\d{1,2}\\s*${MONTH_TOKEN}\\s*\\d{2,4}|${MONTH_TOKEN}\\s*\\d{1,2}\\s*,?\\s*\\d{2,4})`;
+const PERIOD_PATTERN = new RegExp(
+  `(?:statement\\s*(?:period|from)|period|for\\s+the\\s+period)\\s*[:\\s|]*(${DATE_TOKEN})\\s*(?:to|[-–—])\\s*(${DATE_TOKEN})`,
+  'i',
+);
 
 const METADATA_LABELS =
   /\s+(?:account\s*(?:no\.?|number|holder)|a\/c|ifsc|branch|customer\s*name|statement\s*(?:period|from)|period)\b.*$/i;
@@ -1053,12 +1081,16 @@ function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefin
   const labeledAccount = markdown.match(
     /(?:account\s*(?:no\.?|number)|a\/c\s*(?:no\.?|number)?)[:\s|]*([Xx*•\d][Xx*•\d\s-]{5,24})/i,
   )?.[1];
-  if (labeledAccount && !metadata.accountNumberMasked) {
+  if (labeledAccount) {
     const masked = maskAccountNumber(labeledAccount);
-    if (masked) {
+    if (
+      masked &&
+      (!metadata.accountNumberMasked ||
+        masked.masked.length > metadata.accountNumberMasked.length)
+    ) {
       metadata.accountNumberMasked = masked.masked;
       metadata.accountTail = masked.tail;
-      metadata.accountCategory = 'bank_account';
+      metadata.accountCategory ??= 'bank_account';
     }
   }
 
@@ -1069,20 +1101,14 @@ function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefin
   if (ifsc) metadata.ifsc = ifsc;
 
   const holder = markdown.match(
-    /(?:account\s*holder(?:\s*name)?|customer\s*name|name\s*of\s*(?:the\s*)?account\s*holder)[:\s|]+([A-Za-z][A-Za-z .'-]{2,80})/i,
+    /(?:account\s*holders?|customer\s*name|name\s*of\s*(?:the\s*)?account\s*holder)[:\s|]+([A-Za-z][A-Za-z0-9 .'&/-]{2,80})/i,
   )?.[1];
   if (holder) metadata.accountHolder = cleanMetadataValue(holder);
 
   const branch = markdown.match(/(?:branch(?:\s*name)?)[:\s|]+([A-Za-z][A-Za-z .'-]{2,60})/i)?.[1];
   if (branch) metadata.branch = cleanMetadataValue(branch);
 
-  const period =
-    markdown.match(
-      /(?:statement\s*(?:period|from)|period)[:\s|]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i,
-    ) ??
-    markdown.match(
-      /(?:from)[:\s|]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i,
-    );
+  const period = markdown.match(PERIOD_PATTERN);
   if (period) {
     const from = parseStatementDate(period[1]);
     const to = parseStatementDate(period[2]);
@@ -1116,6 +1142,11 @@ export async function parsePdfStatement(
   delete statement.sourceText;
   if (statement.rows.length === 0) {
     throw new ScannedPdfError('PDF extraction failed. Docling returned no statement rows.');
+  }
+  if (statement.closingBalanceMinor === undefined) {
+    const ordered = [...statement.rows].sort((a, b) => a.date.localeCompare(b.date));
+    const lastBalance = ordered[ordered.length - 1]?.balanceMinor;
+    if (lastBalance !== undefined) statement.closingBalanceMinor = lastBalance;
   }
 
   const outcome = reconcileStatement(statement);

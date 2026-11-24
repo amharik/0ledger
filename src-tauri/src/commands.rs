@@ -1315,6 +1315,12 @@ mod tests {
         assert!(!events.is_empty(), "extraction emitted no progress events");
         assert!(events.iter().any(|event| event.percent >= 8));
         assert!(events.iter().all(|event| event.request_id == "test"));
+
+        // Optional escape hatch for validating the TypeScript parser against
+        // real Docling output. The caller is responsible for deleting the file.
+        if let Ok(path) = std::env::var("ZERO_LEDGER_TEST_MARKDOWN_OUT") {
+            fs::write(path, &result.markdown).expect("could not write extracted Markdown");
+        }
     }
 
     #[test]

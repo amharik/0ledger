@@ -221,6 +221,47 @@ describe('Docling PDF extraction', () => {
     await expect(parsePdfStatement(BYTES)).rejects.toThrow(/closing balance/i);
   });
 
+  it('does not let a qualified cumulative balance override the closing balance', async () => {
+    mocks.pdfDoclingFromRust.mockResolvedValue(
+      docling(`| Date | Description | Debit | Credit | Balance |
+| --- | --- | --- | --- | --- |
+| 01-10-2026 | B/F |  |  | 1,000.00 |
+| 02-10-2026 | UPI PAYMENT | 100.00 |  | 900.00 |
+
+| Label | Amount |
+| --- | --- |
+| Opening Balance (Cumulative) | 30,231.00 |
+| Closing Balance (Cumulative) | 32,822.00 |
+`),
+    );
+
+    const statement = await parsePdfStatement(BYTES);
+
+    expect(statement.closingBalanceMinor).toBe(90_000);
+    expect(statement.rows).toHaveLength(1);
+  });
+
+  it('extracts plural account holders and month-name statement periods', async () => {
+    const markdown = `ICICI BANK
+ACCOUNT HOLDERS : M/S.SYNTHETIC TRADERS
+Savings A/c XXXXXXXX9876
+## Statement of Transactions in Savings Account XXXXXXXX9876 in INR for the period October 01, 2026 - October 31, 2026
+
+${GOOD_MARKDOWN}`;
+    mocks.pdfDoclingFromRust.mockResolvedValue(docling(markdown));
+
+    const statement = await parsePdfStatement(BYTES);
+
+    expect(statement.metadata).toMatchObject({
+      accountNumberMasked: 'XXXXXXXX9876',
+      accountTail: '9876',
+      accountHolder: 'M/S.SYNTHETIC TRADERS',
+      institution: 'ICICI Bank',
+      statementFrom: '2026-10-01',
+      statementTo: '2026-10-31',
+    });
+  });
+
   it('extracts statement account metadata without exposing the full account number', async () => {
     const markdown = `HDFC BANK
 Account No: 12345678901234
@@ -266,6 +307,24 @@ describe('Markdown table stitching', () => {
     expect(statement.rows).toHaveLength(2);
     expect(statement.rows.map((row) => row.date)).toEqual(['2026-10-02', '2026-10-03']);
     expect(statement.rows[1]).toMatchObject({ creditMinor: 50_000, balanceMinor: 140_000 });
+  });
+
+  it('ignores a page-total row instead of merging it into the last transaction', () => {
+    const markdown = `| Date | Description | Debit | Credit | Balance |
+| --- | --- | --- | --- | --- |
+| 01-10-2026 | B/F |  |  | 1,000.00 |
+| 02-10-2026 | UPI PAYMENT | 100.00 |  | 900.00 |
+|  |  | Total: | 100.00 | 0.00 | 900.00 |
+
+| Date | Description | Debit | Credit | Balance |
+| --- | --- | --- | --- | --- |
+| 03-10-2026 | SALARY CREDIT |  | 500.00 | 1,400.00 |
+`;
+
+    const statement = parseMarkdownStatement(markdown);
+
+    expect(statement.rows).toHaveLength(2);
+    expect(statement.rows.map((row) => row.date)).toEqual(['2026-10-02', '2026-10-03']);
   });
 
   it('joins a row whose cells were split across a page break', () => {
