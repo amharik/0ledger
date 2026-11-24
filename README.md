@@ -62,7 +62,7 @@ Email / PDF / CSV / XLSX
 - **UI & Runtime**: React + TypeScript, Vite, Tauri v2 desktop; Kotlin/Compose and SwiftUI mobile shells.
 - **Storage**: SQLite via `zeroledger-storage` (WAL, migrations, audit chain, change log). Dexie/IndexedDB is a write-through cache for screens that have not moved to the native store yet; desktop reports read SQLite when it is available.
 - **Sync**: UI-agnostic, transport-agnostic change envelopes with last-writer-wins conflict resolution.
-- **Parsing**: pdf.js, PapaParse, ExcelJS, postal-mime, client-side OCR.
+- **Parsing**: native Rust PDF text/layout extraction, Docling OCR, PapaParse, ExcelJS, postal-mime.
 - **No remote code**; the optional API server runs locally and can be locked down with tenant tokens and TLS.
 
 ## Development
@@ -84,6 +84,24 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 `npm` remains supported (`npm install`, `npm run dev`, `npm test`); Bun is used in CI and is the
 recommended package manager because `bun.lock` is authoritative.
+
+### PDF extraction and Docling
+
+Development builds (`tauri:dev`) try Docling first so its table output can be
+inspected; production builds keep the native extractors first. Docling is an
+external CLI and is not bundled:
+
+```bash
+docling --version                              # confirm the CLI is installed
+pip install --upgrade docling                  # or: uv tool install docling
+docling convert tests/fixtures/bank-table.pdf --from pdf --to md \
+  --output /tmp/opencode/docling-out --ocr      # standalone smoke test
+```
+
+Import a PDF in `tauri:dev` and watch the terminal for the
+`[pdf] Docling: N rows, balance verified|unverifiable|mismatch` line. If Docling
+is missing, the log shows why and extraction falls back to anydoc and the
+positioned-text extractor.
 
 ### Server port and host
 

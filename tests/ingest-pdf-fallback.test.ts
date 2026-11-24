@@ -4,15 +4,9 @@ const mocks = vi.hoisted(() => ({
   pdfMarkdownFromRust: vi.fn(),
   pdfLayoutFromRust: vi.fn(),
   pdfOcrFromDocling: vi.fn(),
-  pdfJsDocument: vi.fn(),
 }));
 
 vi.mock('@/core/ingest/pdf-rust', () => mocks);
-
-vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
-  GlobalWorkerOptions: { workerSrc: '' },
-  getDocument: mocks.pdfJsDocument,
-}));
 
 import {
   ScannedPdfError,
@@ -73,38 +67,41 @@ function layoutItems(): PdfTextItem[] {
   ];
 }
 
-describe('PDF extraction fallback', () => {
+describe('PDF extraction order', () => {
   beforeEach(() => {
     mocks.pdfMarkdownFromRust.mockReset();
     mocks.pdfLayoutFromRust.mockReset();
     mocks.pdfOcrFromDocling.mockReset();
-    mocks.pdfJsDocument.mockReset();
     mocks.pdfLayoutFromRust.mockResolvedValue({ items: [], page_count: 0 });
-    mocks.pdfJsDocument.mockReturnValue({
-      promise: Promise.resolve({
-        numPages: 0,
-        getPage: async () => ({ getTextContent: async () => ({ items: [] }) }),
-      }),
-      destroy: async () => {},
-    });
   });
 
-  it('uses anydoc when its output parses and balances', async () => {
+  it('uses Docling first when it produces statement rows', async () => {
+    mocks.pdfOcrFromDocling.mockResolvedValue({ markdown: GOOD_MARKDOWN });
+    mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: BAD_MARKDOWN });
+
+    const statement = await parsePdfStatement(BYTES);
+
+    expect(statement.rows).toHaveLength(2);
+    expect(mocks.pdfOcrFromDocling).toHaveBeenCalledWith(BYTES, undefined);
+    expect(mocks.pdfMarkdownFromRust).not.toHaveBeenCalled();
+    expect(mocks.pdfLayoutFromRust).not.toHaveBeenCalled();
+  });
+
+  it('falls back to anydoc when Docling is unavailable', async () => {
+    mocks.pdfOcrFromDocling.mockResolvedValue({ error: 'not installed' });
     mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: GOOD_MARKDOWN });
-    mocks.pdfOcrFromDocling.mockResolvedValue({ markdown: BAD_MARKDOWN });
 
     const statement = await parsePdfStatement(BYTES);
 
     expect(statement.rows).toHaveLength(2);
     expect(mocks.pdfMarkdownFromRust).toHaveBeenCalledWith(BYTES, undefined);
     expect(mocks.pdfLayoutFromRust).not.toHaveBeenCalled();
-    expect(mocks.pdfOcrFromDocling).not.toHaveBeenCalled();
   });
 
-  it('uses positioned text when anydoc flattens the statement table', async () => {
+  it('uses positioned text when Docling is unavailable and anydoc flattens the table', async () => {
+    mocks.pdfOcrFromDocling.mockResolvedValue({ error: 'not installed' });
     mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: BAD_MARKDOWN });
     mocks.pdfLayoutFromRust.mockResolvedValue({ items: layoutItems(), page_count: 1 });
-    mocks.pdfOcrFromDocling.mockResolvedValue({ error: 'not installed' });
 
     const statement = await parsePdfStatement(BYTES);
 
@@ -123,92 +120,45 @@ describe('PDF extraction fallback', () => {
     });
     expect(statement.openingBalanceMinor).toBe(100_000);
     expect(statement.closingBalanceMinor).toBe(140_000);
-    expect(mocks.pdfOcrFromDocling).not.toHaveBeenCalled();
-  });
-
-  it('falls back to Docling when both anydoc and positioned text fail balance verification', async () => {
-    mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: BAD_MARKDOWN });
-    const broken = layoutItems();
-    broken[12] = item('850.00', 480, 60);
-    mocks.pdfLayoutFromRust.mockResolvedValue({ items: broken, page_count: 1 });
-    mocks.pdfOcrFromDocling.mockResolvedValue({ markdown: GOOD_MARKDOWN });
-
-    const statement = await parsePdfStatement(BYTES);
-
-    expect(statement.rows).toHaveLength(2);
-    expect(mocks.pdfOcrFromDocling).toHaveBeenCalledWith(BYTES, undefined);
   });
 
   it('prefers layout evidence over an unverifiable anydoc table', async () => {
+    mocks.pdfOcrFromDocling.mockResolvedValue({ error: 'not installed' });
     mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: NO_BALANCE_MARKDOWN });
     mocks.pdfLayoutFromRust.mockResolvedValue({ items: layoutItems(), page_count: 1 });
-    mocks.pdfOcrFromDocling.mockResolvedValue({ error: 'not installed' });
 
     const statement = await parsePdfStatement(BYTES);
 
     expect(statement.rows).toHaveLength(2);
     expect(statement.rows[0]?.balanceMinor).toBe(90_000);
     expect(statement.rows[1]?.balanceMinor).toBe(140_000);
-    expect(mocks.pdfOcrFromDocling).not.toHaveBeenCalled();
   });
 
   it('keeps anydoc rows for statements without a balance column', async () => {
-    mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: NO_BALANCE_MARKDOWN });
-    mocks.pdfLayoutFromRust.mockResolvedValue({ items: [], page_count: 0 });
     mocks.pdfOcrFromDocling.mockResolvedValue({ error: 'not installed' });
+    mocks.pdfMarkdownFromRust.mockResolvedValue({ markdown: NO_BALANCE_MARKDOWN });
 
     const statement = await parsePdfStatement(BYTES);
 
     expect(statement.rows).toHaveLength(2);
     expect(statement.rows.every((row) => row.balanceMinor === undefined)).toBe(true);
-    expect(mocks.pdfOcrFromDocling).not.toHaveBeenCalled();
   });
 
-  it('uses pdf.js text when the native extractors are unavailable', async () => {
-    mocks.pdfMarkdownFromRust.mockResolvedValue({ code: 'desktopRequired', error: 'desktop only' });
+  it('passes the password to Docling, anydoc and layout', async () => {
+    mocks.pdfOcrFromDocling.mockResolvedValue({ code: 'invoke', error: 'docling missing' });
+    mocks.pdfMarkdownFromRust.mockResolvedValue({ code: 'encrypted', error: 'encrypted' });
     mocks.pdfLayoutFromRust.mockResolvedValue({
       items: [],
       page_count: 0,
-      code: 'desktopRequired',
-      error: 'desktop only',
-    });
-    mocks.pdfOcrFromDocling.mockResolvedValue({ code: 'desktopRequired', error: 'desktop only' });
-    mocks.pdfJsDocument.mockReturnValue({
-      promise: Promise.resolve({
-        numPages: 1,
-        getPage: async () => ({
-          getTextContent: async () => ({
-            items: [
-              { str: 'Statement of Account', transform: [1, 0, 0, 1, 30, 100] },
-              { str: '01-10-2026 B/F 1,000.00', transform: [1, 0, 0, 1, 30, 80] },
-              { str: '02-10-2026 UPI PAYMENT 100.00 900.00', transform: [1, 0, 0, 1, 30, 60] },
-            ],
-          }),
-        }),
-      }),
-      destroy: async () => {},
+      code: 'encrypted',
+      error: 'encrypted',
     });
 
-    const statement = await parsePdfStatement(BYTES);
+    await expect(parsePdfStatement(BYTES, { password: 'secret' })).rejects.toThrow(ScannedPdfError);
 
-    expect(statement.rows).toHaveLength(1);
-    expect(statement.rows[0]).toMatchObject({
-      date: '2026-10-02',
-      description: 'UPI PAYMENT',
-      debitMinor: 10_000,
-      balanceMinor: 90_000,
-    });
-  });
-
-  it('passes the password to every extractor', async () => {
-    mocks.pdfMarkdownFromRust.mockResolvedValue({ code: 'encrypted', error: 'encrypted' });
-    mocks.pdfOcrFromDocling.mockResolvedValue({ markdown: GOOD_MARKDOWN });
-
-    await parsePdfStatement(BYTES, { password: 'secret' });
-
+    expect(mocks.pdfOcrFromDocling).toHaveBeenCalledWith(BYTES, 'secret');
     expect(mocks.pdfMarkdownFromRust).toHaveBeenCalledWith(BYTES, 'secret');
     expect(mocks.pdfLayoutFromRust).toHaveBeenCalledWith(BYTES, 'secret');
-    expect(mocks.pdfOcrFromDocling).toHaveBeenCalledWith(BYTES, 'secret');
   });
 
   it('reports anydoc, layout and Docling failures', async () => {
@@ -218,7 +168,7 @@ describe('PDF extraction fallback', () => {
 
     await expect(parsePdfStatement(BYTES)).rejects.toThrow(ScannedPdfError);
     await expect(parsePdfStatement(BYTES)).rejects.toThrow(
-      /anydoc \(needsOcr\) failed: pages need OCR.*layout \(pdfInspector\) failed: bad xref.*Docling fallback failed: docling missing/,
+      /anydoc \(needsOcr\) failed: pages need OCR.*layout \(pdfInspector\) failed: bad xref.*Docling failed: docling missing/,
     );
   });
 });

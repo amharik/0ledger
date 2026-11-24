@@ -112,9 +112,9 @@ My Drive/0ledger/<workspace-slug>/
 
 ## 11. Statement ingestion
 
-- CSV (PapaParse), Excel (ExcelJS), text PDF and password-protected PDF (pdf.js).
+- CSV (PapaParse), Excel (ExcelJS), text PDF and password-protected PDF (native Rust extraction).
 - Password prompt on `PasswordException`; optional encrypted remember-for-batch.
-- Scanned PDFs: detect an empty text layer and raise `ScannedPdfError` with `requiresOcr`; OCR itself is not bundled (`OCR_ENABLED = false`).
+- Scanned PDFs: fall back to an external Docling CLI when installed; otherwise raise `ScannedPdfError` with `requiresOcr`.
 - Data-driven adapters: HDFC, ICICI, SBI, Axis, Kotak, IDFC First, Yes, PNB, BoB, Canara + FASTag.
 - Dedupe: Message-ID, UTR/reference, amount+date+merchant, file SHA-256.
 - Import preview, edit, undo; nothing posts without review by default.

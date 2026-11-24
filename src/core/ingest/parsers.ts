@@ -1,5 +1,4 @@
 import Papa from 'papaparse';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { parseAmountToMinor } from '@/core/money/money';
 import { detectStatementAdapter, getAdapter } from './adapters';
 import { parseSpecializedStatement } from './specialized';
@@ -7,9 +6,10 @@ import {
   pdfLayoutFromRust,
   pdfMarkdownFromRust,
   pdfOcrFromDocling,
+  type PdfOcrResult,
   type PdfTextItem,
 } from './pdf-rust';
-import { MAX_PDF_PAGES, assertByteLimit, assertRowLimit, assertTextLimit } from './limits';
+import { assertByteLimit, assertRowLimit, assertTextLimit } from './limits';
 import { verifyStatementBalance, type BalanceLine } from './balance';
 import type {
   ParsedStatement,
@@ -551,70 +551,6 @@ export class ScannedPdfError extends Error {
 }
 
 export const OCR_ENABLED = false;
-
-/**
- * Client-side text extraction with pdf.js. Works in the browser build and in
- * the desktop webview, handles encrypted PDFs, and acts as a text fallback
- * before OCR when the native extractors cannot produce a statement.
- */
-async function pdfTextWithPdfJs(
-  bytes: ArrayBuffer | Uint8Array,
-  password?: string,
-): Promise<string | undefined> {
-  let loadingTask: { promise: Promise<unknown>; destroy: () => Promise<void> } | undefined;
-  try {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-    const data = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes);
-    loadingTask = pdfjs.getDocument({
-      data,
-      ...(password ? { password } : {}),
-      useSystemFonts: true,
-    }) as unknown as { promise: Promise<unknown>; destroy: () => Promise<void> };
-    const doc = (await loadingTask.promise) as {
-      numPages: number;
-      getPage: (page: number) => Promise<{
-        getTextContent: () => Promise<{ items: Array<Record<string, unknown>> }>;
-      }>;
-    };
-    if (doc.numPages > MAX_PDF_PAGES) {
-      throw new Error(`PDF has too many pages (max ${MAX_PDF_PAGES})`);
-    }
-    const lines: string[] = [];
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-      const page = await doc.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const positioned = content.items
-        .flatMap((item) => {
-          if (!('str' in item) || !('transform' in item)) return [];
-          const transform = item.transform as number[];
-          return [{ text: String(item.str ?? ''), x: transform[4] ?? 0, y: transform[5] ?? 0 }];
-        })
-        .sort((a, b) => b.y - a.y || a.x - b.x);
-      const byLine = new Map<number, string[]>();
-      for (const item of positioned) {
-        const key = Math.round(item.y * 2) / 2;
-        const bucket = byLine.get(key) ?? [];
-        bucket.push(item.text);
-        byLine.set(key, bucket);
-      }
-      for (const value of [...byLine.entries()].sort((a, b) => b[0] - a[0]).map((entry) => entry[1])) {
-        lines.push(value.join(' ').replace(/\s+/g, ' ').trim());
-      }
-      if (pageNumber < doc.numPages) lines.push(PAGE_BREAK);
-    }
-    return lines.join('\n');
-  } catch {
-    return undefined;
-  } finally {
-    try {
-      await loadingTask?.destroy();
-    } catch {
-      // Ignore teardown failures; the extraction result is already decided.
-    }
-  }
-}
-
 
 const PAGE_BREAK = '\u000c';
 const DATE_START =
@@ -1164,11 +1100,32 @@ function balanceStatus(statement: ParsedStatement): BalanceStatus {
     : 'unverifiable';
 }
 
+// Prefer Docling in development so its table output can be validated in
+// `tauri:dev`. Production builds keep native-first extraction.
+const PREFER_DOCLING = import.meta.env.DEV;
+const DEBUG_PDF = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
 export async function parsePdfStatement(
   bytes: ArrayBuffer | Uint8Array,
   options: ParseStatementOptions & { password?: string } = {},
 ): Promise<ParsedStatement> {
   assertByteLimit(bytes, 'PDF');
+
+  let docling: PdfOcrResult | undefined;
+  if (PREFER_DOCLING) {
+    docling = await pdfOcrFromDocling(bytes, options.password);
+    if (docling.markdown) {
+      const parsed = parseExtractedPdfMarkdown(docling.markdown, options);
+      if (DEBUG_PDF) {
+        console.info(
+          `[pdf] Docling: ${parsed.rows.length} rows, balance ${balanceStatus(parsed)}`,
+        );
+      }
+      if (parsed.rows.length > 0) return parsed;
+    } else if (DEBUG_PDF) {
+      console.info(`[pdf] Docling unavailable: ${docling.error ?? docling.code ?? 'no output'}`);
+    }
+  }
 
   const anydoc = await pdfMarkdownFromRust(bytes, options.password);
   const anydocParsed = anydoc.markdown ? parseExtractedPdfMarkdown(anydoc.markdown, options) : undefined;
@@ -1193,20 +1150,11 @@ export async function parsePdfStatement(
   if (anydocParsed && anydocStatus === 'unverifiable') return anydocParsed;
   if (layoutParsed && layoutStatus === 'unverifiable') return layoutParsed;
 
-  // pdf.js text extraction works in the browser build and covers encrypted
-  // PDFs when the native extractors cannot read them.
-  const pdfJsText = await pdfTextWithPdfJs(bytes, options.password);
-  const pdfJsParsed = pdfJsText ? parseTextStatement(pdfJsText, options) : undefined;
-  const pdfJsStatus =
-    pdfJsParsed && pdfJsParsed.rows.length > 0 ? balanceStatus(pdfJsParsed) : undefined;
-  if (pdfJsParsed && pdfJsStatus === 'verified') return pdfJsParsed;
-
-  const docling = await pdfOcrFromDocling(bytes, options.password);
+  if (!docling) docling = await pdfOcrFromDocling(bytes, options.password);
   if (docling.markdown) {
     const parsed = parseExtractedPdfMarkdown(docling.markdown, options);
     if (parsed.rows.length > 0) return parsed;
   }
-  if (pdfJsParsed && pdfJsParsed.rows.length > 0) return pdfJsParsed;
 
   const anydocDetail = anydoc.error
     ? `anydoc${anydoc.code ? ` (${anydoc.code})` : ''} failed: ${anydoc.error}`
@@ -1222,7 +1170,7 @@ export async function parsePdfStatement(
       : 'layout extracted no statement rows';
   throw new ScannedPdfError(
     docling.error
-      ? `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling fallback failed: ${docling.error}`
-      : `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling fallback returned no statement rows.`,
+      ? `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling failed: ${docling.error}`
+      : `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling returned no statement rows.`,
   );
 }

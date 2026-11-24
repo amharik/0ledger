@@ -42,7 +42,7 @@ Updated: 2026-11-09
 - [x] `.eml` import + MIME/attachment routing
 - [x] Webmail DOM capture (Gmail)
 - [x] CSV / Excel statement parsers
-- [x] Text PDF + password-protected PDF (pdf.js)
+- [x] Text PDF + password-protected PDF (native Rust extraction)
 - [x] Bank adapters: HDFC, ICICI, SBI, Axis, Kotak, IDFC First, Yes, PNB, BoB, Canara
 - [x] FASTag adapters (PDF/CSV), vehicle/plaza grouping
 - [x] Staged import, confidence, dedupe, undo
