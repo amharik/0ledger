@@ -48,5 +48,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libxdo-dev
+            libxdo-dev \
+            g++
       - run: cargo check --manifest-path src-tauri/Cargo.toml
