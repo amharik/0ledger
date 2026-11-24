@@ -3,10 +3,13 @@ use imap::Session;
 use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,79 +63,52 @@ pub struct SaveEmailFileRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PdfMarkdownRequest {
+pub struct PdfExtractionRequest {
     pub bytes_base64: String,
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PdfExtractionProgress {
+    pub request_id: String,
+    pub stage: String,
+    pub current: usize,
+    pub total: usize,
+    pub percent: u8,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PdfMarkdownResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub markdown: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl PdfMarkdownResult {
-    fn ok(markdown: String) -> Self {
-        Self {
-            markdown: Some(markdown),
-            code: None,
-            error: None,
-        }
-    }
-
-    fn failed(code: &str, error: String) -> Self {
-        Self {
-            markdown: None,
-            code: Some(code.to_string()),
-            error: Some(error),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PdfTextItem {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub page: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PdfLayoutResult {
-    pub items: Vec<PdfTextItem>,
+pub struct PdfExtractionResult {
+    pub markdown: String,
     pub page_count: u32,
+    pub text_pages: u32,
+    pub ocr_pages: u32,
+    pub mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-impl PdfLayoutResult {
-    fn ok(items: Vec<PdfTextItem>, page_count: u32) -> Self {
-        Self {
-            items,
-            page_count,
-            code: None,
-            error: None,
-        }
-    }
-
+impl PdfExtractionResult {
     fn failed(code: &str, error: String) -> Self {
         Self {
-            items: Vec::new(),
+            markdown: String::new(),
             page_count: 0,
+            text_pages: 0,
+            ocr_pages: 0,
+            mode: "unavailable".to_string(),
             code: Some(code.to_string()),
             error: Some(error),
         }
     }
 }
+
+pub type PdfProgressCallback = Arc<dyn Fn(PdfExtractionProgress) + Send + Sync>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SavedEmailResult {
@@ -373,68 +349,293 @@ fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, String> 
     Ok(output)
 }
 
-pub fn extract_pdf_markdown_impl(req: PdfMarkdownRequest) -> Result<PdfMarkdownResult, String> {
-    let bytes = match base64::engine::general_purpose::STANDARD.decode(&req.bytes_base64) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return Ok(PdfMarkdownResult::failed(
-                "decode",
-                format!("Base64 decode error: {}", error),
-            ));
+#[derive(Debug, Clone)]
+struct TextLayerInfo {
+    page_count: u32,
+    text_pages: u32,
+    ocr_pages: u32,
+    broken: bool,
+}
+
+/// Inspect the PDF's native text layer. Pages with real text are extracted
+/// natively by Docling; pages without text (or with a broken glyph mapping)
+/// are the only ones that should go through OCR.
+fn analyze_text_layer(bytes: &[u8]) -> TextLayerInfo {
+    let mut page_chars: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut broken_chars = 0usize;
+    let mut total_chars = 0usize;
+
+    if let Ok(items) = pdf_inspector::extract_text_with_positions_mem(bytes) {
+        for item in items {
+            if !matches!(item.item_type, pdf_inspector::types::ItemType::Text) {
+                continue;
+            }
+            let text = item.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let chars = text.chars().count();
+            total_chars += chars;
+            if text.contains('\u{FFFD}')
+                || text
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t')
+            {
+                broken_chars += chars;
+            }
+            *page_chars.entry(item.page).or_default() += chars;
         }
-    };
-    let decrypted = match decrypt_pdf(&bytes, req.password.as_deref()) {
-        Ok(bytes) => bytes,
-        Err(error) => return Ok(PdfMarkdownResult::failed("decrypt", error)),
+    }
+
+    let detected_pages = page_chars.keys().copied().max().unwrap_or(0);
+    let page_count = lopdf::Document::load_mem(bytes)
+        .map(|document| document.get_pages().len() as u32)
+        .unwrap_or(detected_pages);
+    let text_pages = page_chars
+        .values()
+        .filter(|count| **count >= 20)
+        .count() as u32;
+    let broken = total_chars > 0 && (broken_chars as f64 / total_chars as f64) > 0.05;
+    let ocr_pages = if text_pages == 0 {
+        page_count
+    } else {
+        page_count
+            .saturating_sub(text_pages)
+            .max(if broken { 1 } else { 0 })
     };
 
-    match anydoc::to_markdown_bytes(&decrypted, Some(anydoc::Format::Pdf)) {
-        Ok(markdown) => Ok(PdfMarkdownResult::ok(markdown)),
-        Err(error) => Ok(PdfMarkdownResult::failed(error.code(), error.to_string())),
+    TextLayerInfo {
+        page_count,
+        text_pages,
+        ocr_pages,
+        broken,
     }
 }
 
-/// Extract positioned text runs. This keeps column geometry intact for
-/// borderless statement tables that a generic Markdown conversion flattens.
-pub fn extract_pdf_layout_impl(req: PdfMarkdownRequest) -> Result<PdfLayoutResult, String> {
-    let bytes = match base64::engine::general_purpose::STANDARD.decode(&req.bytes_base64) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return Ok(PdfLayoutResult::failed(
-                "decode",
-                format!("Base64 decode error: {}", error),
-            ));
-        }
-    };
-    let decrypted = match decrypt_pdf(&bytes, req.password.as_deref()) {
-        Ok(bytes) => bytes,
-        Err(error) => return Ok(PdfLayoutResult::failed("decrypt", error)),
-    };
+fn emit_pdf_progress(
+    callback: &Option<PdfProgressCallback>,
+    request_id: &str,
+    stage: &str,
+    percent: u8,
+    message: impl Into<String>,
+) {
+    if let Some(callback) = callback {
+        callback(PdfExtractionProgress {
+            request_id: request_id.to_string(),
+            stage: stage.to_string(),
+            current: percent as usize,
+            total: 100,
+            percent,
+            message: message.into(),
+        });
+    }
+}
 
-    match pdf_inspector::extract_text_with_positions_mem(&decrypted) {
-        Ok(items) => {
-            let mut page_count = 0;
-            let text_items: Vec<PdfTextItem> = items
-                .into_iter()
-                .filter(|item| {
-                    matches!(item.item_type, pdf_inspector::types::ItemType::Text)
-                        && !item.text.trim().is_empty()
-                })
-                .map(|item| {
-                    page_count = page_count.max(item.page);
-                    PdfTextItem {
-                        text: item.text,
-                        x: item.x,
-                        y: item.y,
-                        width: item.width,
-                        height: item.height,
-                        page: item.page,
+fn parse_percent(line: &str) -> Option<u8> {
+    let index = line.find('%')?;
+    let digits: String = line[..index]
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn sanitize_progress_line(line: &str) -> String {
+    let mut output = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
                     }
-                })
-                .collect();
-            Ok(PdfLayoutResult::ok(text_items, page_count))
+                }
+            }
+        } else if !c.is_control() {
+            output.push(c);
         }
-        Err(error) => Ok(PdfLayoutResult::failed("pdfInspector", error.to_string())),
+    }
+    output.trim().to_string()
+}
+
+struct ProgressReader<'a> {
+    callback: &'a Option<PdfProgressCallback>,
+    request_id: &'a str,
+    stage: String,
+    last_percent: u8,
+    last_emit: Instant,
+}
+
+impl<'a> ProgressReader<'a> {
+    fn new(callback: &'a Option<PdfProgressCallback>, request_id: &'a str) -> Self {
+        Self {
+            callback,
+            request_id,
+            stage: String::new(),
+            last_percent: 0,
+            last_emit: Instant::now() - Duration::from_secs(1),
+        }
+    }
+
+    fn handle_line(&mut self, raw: &str) {
+        let line = sanitize_progress_line(raw);
+        if line.is_empty() {
+            return;
+        }
+        let lower = line.to_lowercase();
+        let stage = if lower.contains("loading weights")
+            || lower.contains("fetching model")
+            || lower.contains("initializing pipeline")
+        {
+            "models".to_string()
+        } else if lower.contains("layout") {
+            "layout".to_string()
+        } else if lower.contains("table") {
+            "tables".to_string()
+        } else if lower.contains("ocr") {
+            "ocr".to_string()
+        } else if lower.contains("processing document") {
+            "layout".to_string()
+        } else if lower.contains("finished converting") {
+            "finish".to_string()
+        } else {
+            self.stage.clone()
+        };
+        if stage.is_empty() {
+            return;
+        }
+        self.stage = stage.clone();
+
+        let (base, span) = match stage.as_str() {
+            "models" => (5u16, 10u16),
+            "layout" => (15u16, 40u16),
+            "tables" | "ocr" => (55u16, 30u16),
+            "finish" => (95u16, 4u16),
+            _ => (self.last_percent as u16, 0u16),
+        };
+        let percent = match parse_percent(&line) {
+            Some(value) => (base + (value as u16 * span / 100)).min(99) as u8,
+            None => base as u8,
+        }
+        .max(self.last_percent);
+
+        let now = Instant::now();
+        if percent == self.last_percent
+            && self.stage == stage
+            && now.duration_since(self.last_emit) < Duration::from_millis(250)
+        {
+            return;
+        }
+        self.last_percent = percent;
+        self.last_emit = now;
+        emit_pdf_progress(
+            self.callback,
+            self.request_id,
+            &stage,
+            percent,
+            line.chars().take(240).collect::<String>(),
+        );
+    }
+}
+
+fn read_stream<R: Read>(reader: R, mut on_line: impl FnMut(&str)) -> String {
+    let mut reader = BufReader::new(reader);
+    let mut buffer = [0u8; 8192];
+    let mut pending: Vec<u8> = Vec::new();
+    let mut output = String::new();
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        for &byte in &buffer[..read] {
+            if byte == b'\n' || byte == b'\r' {
+                if !pending.is_empty() {
+                    let line = String::from_utf8_lossy(&pending).to_string();
+                    on_line(&line);
+                    if output.len() < 32_768 {
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
+                    pending.clear();
+                }
+            } else {
+                pending.push(byte);
+                if pending.len() > 32_768 {
+                    pending.clear();
+                }
+            }
+        }
+    }
+    if !pending.is_empty() {
+        let line = String::from_utf8_lossy(&pending).to_string();
+        on_line(&line);
+        if output.len() < 32_768 {
+            output.push_str(&line);
+        }
+    }
+    output
+}
+
+fn run_docling(
+    program: &str,
+    python_module: bool,
+    args: &[String],
+    callback: &Option<PdfProgressCallback>,
+    request_id: &str,
+) -> Result<String, String> {
+    let mut command = Command::new(program);
+    if python_module {
+        command.arg("-m").arg("docling");
+    }
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("{} could not run: {}", program, error))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("{} produced no stderr stream", program))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{} produced no stdout stream", program))?;
+
+    let stderr_callback = callback.clone();
+    let stderr_request_id = request_id.to_string();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut progress = ProgressReader::new(&stderr_callback, &stderr_request_id);
+        read_stream(stderr, |line| progress.handle_line(line))
+    });
+    let stdout_thread = std::thread::spawn(move || read_stream(stdout, |_| {}));
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("{} wait failed: {}", program, error))?;
+    let stderr_text = stderr_thread.join().unwrap_or_default();
+    let _ = stdout_thread.join();
+    if status.success() {
+        Ok(stderr_text)
+    } else {
+        Err(format!(
+            "{} exited with {}: {}",
+            program,
+            status,
+            stderr_text.trim().chars().take(2000).collect::<String>()
+        ))
     }
 }
 
@@ -465,73 +666,142 @@ fn find_markdown_file(root: &Path) -> Option<PathBuf> {
         .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
 }
 
-pub fn ocr_pdf_with_docling_impl(req: PdfMarkdownRequest) -> Result<String, String> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&req.bytes_base64)
-        .map_err(|e| format!("Base64 decode error: {}", e))?;
-    let bytes = decrypt_pdf(&bytes, req.password.as_deref())?;
+pub fn extract_pdf_with_docling_impl(
+    req: PdfExtractionRequest,
+    progress: Option<PdfProgressCallback>,
+) -> Result<PdfExtractionResult, String> {
+    let request_id = req
+        .request_id
+        .clone()
+        .unwrap_or_else(|| "pdf-extraction".to_string());
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&req.bytes_base64) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(PdfExtractionResult::failed(
+                "decode",
+                format!("Base64 decode error: {}", error),
+            ));
+        }
+    };
+    let bytes = match decrypt_pdf(&bytes, req.password.as_deref()) {
+        Ok(bytes) => bytes,
+        Err(error) => return Ok(PdfExtractionResult::failed("decrypt", error)),
+    };
+
+    emit_pdf_progress(
+        &progress,
+        &request_id,
+        "analyze",
+        2,
+        "Inspecting the PDF text layer",
+    );
+    let info = analyze_text_layer(&bytes);
+    let needs_ocr = info.text_pages == 0 || info.text_pages < info.page_count || info.broken;
+    let mode = if needs_ocr { "ocr" } else { "native" };
+    emit_pdf_progress(
+        &progress,
+        &request_id,
+        "mode",
+        8,
+        if needs_ocr {
+            format!(
+                "Selectable text on {} of {} pages; OCR will run only on image/broken regions",
+                info.text_pages, info.page_count
+            )
+        } else {
+            format!(
+                "Selectable text on all {} pages; extracting native text and tables without OCR",
+                info.page_count
+            )
+        },
+    );
+
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!("0ledger_docling_{}_{}", std::process::id(), stamp));
+    let temp_dir = std::env::temp_dir().join(format!(
+        "0ledger_docling_{}_{}",
+        std::process::id(),
+        stamp
+    ));
     let output_dir = temp_dir.join("out");
-    fs::create_dir_all(&output_dir).map_err(|e| format!("Could not create docling temp dir: {}", e))?;
+    fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("Could not create docling temp dir: {}", e))?;
     let pdf_path = temp_dir.join("statement.pdf");
     fs::write(&pdf_path, &bytes).map_err(|e| format!("Could not write PDF for docling: {}", e))?;
+
+    let mut args: Vec<String> = vec![
+        "convert".to_string(),
+        pdf_path.to_string_lossy().to_string(),
+        "--from".to_string(),
+        "pdf".to_string(),
+        "--to".to_string(),
+        "md".to_string(),
+        "--output".to_string(),
+        output_dir.to_string_lossy().to_string(),
+        "--tables".to_string(),
+        "--table-mode".to_string(),
+        "accurate".to_string(),
+        "--image-export-mode".to_string(),
+        "placeholder".to_string(),
+    ];
+    if needs_ocr {
+        args.extend([
+            "--ocr".to_string(),
+            "--ocr-mode".to_string(),
+            "layout_regions".to_string(),
+            "--replace-broken".to_string(),
+        ]);
+    } else {
+        args.push("--no-ocr".to_string());
+    }
 
     let result = (|| {
         let mut errors = Vec::new();
         for (program, python_module) in docling_candidates() {
-            let mut command = Command::new(&program);
-            if python_module {
-                command.arg("-m").arg("docling");
-            }
-            command
-                .arg("convert")
-                .arg(&pdf_path)
-                .arg("--from")
-                .arg("pdf")
-                .arg("--to")
-                .arg("md")
-                .arg("--output")
-                .arg(&output_dir)
-                .arg("--ocr");
-            match command.output() {
-                Ok(output) if output.status.success() => {
+            match run_docling(&program, python_module, &args, &progress, &request_id) {
+                Ok(_) => {
                     if let Some(markdown_path) = find_markdown_file(&output_dir) {
                         return fs::read_to_string(&markdown_path)
                             .map_err(|e| format!("Could not read docling Markdown: {}", e));
                     }
                     errors.push(format!("{} produced no Markdown file", program));
                 }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let detail = if stderr.trim().is_empty() { stdout } else { stderr };
-                    errors.push(format!(
-                        "{} failed ({}): {}",
-                        program,
-                        output.status,
-                        detail.trim().chars().take(1000).collect::<String>()
-                    ));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    errors.push(format!("{} not found", program));
-                }
-                Err(error) => {
-                    errors.push(format!("{} could not run: {}", program, error));
-                }
+                Err(error) => errors.push(error),
             }
         }
         Err(format!(
-            "Docling OCR is not available. Install it with `pip install docling` or set DOCLING_BIN. {}",
+            "Docling is not available. Install it with `pip install docling` or set DOCLING_BIN. {}",
             errors.join(" | ")
         ))
     })();
 
     let _ = fs::remove_dir_all(&temp_dir);
-    result
+    match result {
+        Ok(markdown) => {
+            emit_pdf_progress(
+                &progress,
+                &request_id,
+                "complete",
+                100,
+                format!("Docling finished ({} mode)", mode),
+            );
+            Ok(PdfExtractionResult {
+                markdown,
+                page_count: info.page_count,
+                text_pages: info.text_pages,
+                ocr_pages: info.ocr_pages,
+                mode: mode.to_string(),
+                code: None,
+                error: None,
+            })
+        }
+        Err(error) => {
+            emit_pdf_progress(&progress, &request_id, "error", 100, "PDF extraction failed");
+            Ok(PdfExtractionResult::failed("docling", error))
+        }
+    }
 }
 
 pub fn save_email_file_impl(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String> {
@@ -1003,51 +1273,44 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_pdf_markdown() {
+    fn test_analyze_text_layer_detects_selectable_text() {
         let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
-        let req = PdfMarkdownRequest {
-            bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            password: None,
-        };
-        let markdown = extract_pdf_markdown_impl(req).unwrap().markdown.unwrap();
-        assert!(markdown.contains("2026-10-01"));
-        assert!(markdown.contains("UPI PAYMENT"));
-        assert!(markdown.contains("SALARY CREDIT"));
+        let info = analyze_text_layer(bytes);
+        assert!(info.page_count >= 1);
+        assert!(info.text_pages >= 1);
+        assert!(!info.broken);
     }
 
+    /// Manual end-to-end check against a real or synthetic statement. Set
+    /// `ZERO_LEDGER_TEST_PDF` (and optionally `ZERO_LEDGER_TEST_PDF_PASSWORD`)
+    /// and run with `--ignored` on a machine that has the Docling CLI.
     #[test]
-    fn test_extract_pdf_markdown_with_password_on_unencrypted_pdf() {
-        let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
-        let req = PdfMarkdownRequest {
+    #[ignore = "requires the Docling CLI and a statement PDF"]
+    fn test_extract_pdf_with_docling_end_to_end() {
+        let path = std::env::var("ZERO_LEDGER_TEST_PDF")
+            .expect("set ZERO_LEDGER_TEST_PDF to a statement PDF");
+        let password = std::env::var("ZERO_LEDGER_TEST_PDF_PASSWORD")
+            .ok()
+            .filter(|value| !value.is_empty());
+        let bytes = fs::read(&path).expect("could not read test PDF");
+        let req = PdfExtractionRequest {
             bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            password: Some("unused-password".to_string()),
+            password,
+            request_id: Some("test".to_string()),
         };
-        let markdown = extract_pdf_markdown_impl(req).unwrap().markdown.unwrap();
-        assert!(markdown.contains("UPI PAYMENT"));
-    }
 
-    #[test]
-    fn test_extract_pdf_layout_keeps_table_text() {
-        let bytes = include_bytes!("../../tests/fixtures/bank-table.pdf");
-        let req = PdfMarkdownRequest {
-            bytes_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            password: Some("unused-password".to_string()),
-        };
-        let result = extract_pdf_layout_impl(req).unwrap();
-        assert!(result.error.is_none());
+        let result = extract_pdf_with_docling_impl(req, None).expect("extraction task failed");
+        assert!(result.error.is_none(), "extraction error: {:?}", result.error);
+        assert!(!result.markdown.is_empty(), "Docling returned no Markdown");
         assert!(result.page_count >= 1);
-        assert!(result
-            .items
-            .iter()
-            .any(|item| item.text.contains("UPI PAYMENT")));
-        assert!(result
-            .items
-            .iter()
-            .any(|item| item.text.contains("SALARY CREDIT")));
-        assert!(result
-            .items
-            .iter()
-            .any(|item| item.text.contains("2026-10-01")));
+        assert!(result.text_pages + result.ocr_pages >= 1);
+    }
+
+    #[test]
+    fn test_parse_percent_from_docling_progress() {
+        assert_eq!(parse_percent("Layout:  42%|####      | 4/10"), Some(42));
+        assert_eq!(parse_percent("Loading weights: 100%"), Some(100));
+        assert_eq!(parse_percent("no progress here"), None);
     }
 
     #[test]

@@ -39,24 +39,18 @@ fn save_email_file(req: SaveEmailFileRequest) -> Result<SavedEmailResult, String
 }
 
 #[tauri::command]
-async fn extract_pdf_markdown(req: PdfMarkdownRequest) -> Result<PdfMarkdownResult, String> {
-    tauri::async_runtime::spawn_blocking(move || extract_pdf_markdown_impl(req))
-        .await
-        .map_err(|e| format!("PDF parse task error: {}", e))?
-}
-
-#[tauri::command]
-async fn extract_pdf_layout(req: PdfMarkdownRequest) -> Result<PdfLayoutResult, String> {
-    tauri::async_runtime::spawn_blocking(move || extract_pdf_layout_impl(req))
-        .await
-        .map_err(|e| format!("PDF layout task error: {}", e))?
-}
-
-#[tauri::command]
-async fn ocr_pdf_with_docling(req: PdfMarkdownRequest) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || ocr_pdf_with_docling_impl(req))
-        .await
-        .map_err(|e| format!("Docling OCR task error: {}", e))?
+async fn extract_pdf_with_docling(
+    app: tauri::AppHandle,
+    req: PdfExtractionRequest,
+) -> Result<PdfExtractionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let progress: PdfProgressCallback = std::sync::Arc::new(move |payload| {
+            let _ = app.emit("pdf-extract-progress", payload);
+        });
+        extract_pdf_with_docling_impl(req, Some(progress))
+    })
+    .await
+    .map_err(|e| format!("PDF extraction task error: {}", e))?
 }
 
 #[tauri::command]
@@ -123,9 +117,7 @@ fn main() {
             organize_accounting_file,
             save_email_eml,
             save_email_file,
-            extract_pdf_markdown,
-            extract_pdf_layout,
-            ocr_pdf_with_docling,
+            extract_pdf_with_docling,
             imap_test_connection,
             imap_fetch_messages,
             keyring_store_credential,

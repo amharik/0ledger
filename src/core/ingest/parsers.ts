@@ -2,17 +2,13 @@ import Papa from 'papaparse';
 import { parseAmountToMinor } from '@/core/money/money';
 import { detectStatementAdapter, getAdapter } from './adapters';
 import { parseSpecializedStatement } from './specialized';
-import {
-  pdfLayoutFromRust,
-  pdfMarkdownFromRust,
-  pdfOcrFromDocling,
-  type PdfOcrResult,
-  type PdfTextItem,
-} from './pdf-rust';
+import { pdfDoclingFromRust } from './pdf-rust';
+import { detectInstitution, identifyUniqueAccount } from './accounts';
 import { assertByteLimit, assertRowLimit, assertTextLimit } from './limits';
-import { verifyStatementBalance, type BalanceLine } from './balance';
+import { verifyStatementBalance, type BalanceLine, type BalanceMismatch } from './balance';
 import type {
   ParsedStatement,
+  ParsedStatementMetadata,
   ParsedStatementRow,
   ParseStatementOptions,
   StatementAdapter,
@@ -544,13 +540,11 @@ export async function parseXlsxStatement(
 export class ScannedPdfError extends Error {
   readonly requiresOcr = true;
 
-  constructor(message = 'PDF extraction failed. anydoc and Docling did not produce a statement.') {
+  constructor(message = 'PDF extraction failed. Docling did not produce a statement.') {
     super(message);
     this.name = 'ScannedPdfError';
   }
 }
-
-export const OCR_ENABLED = false;
 
 const PAGE_BREAK = '\u000c';
 const DATE_START =
@@ -728,6 +722,113 @@ export function parseTextStatement(text: string, options: ParseStatementOptions 
   };
 }
 
+function looksLikeAmountCell(value: string): boolean {
+  return /^[\s(]*(?:₹|inr|rs\.?)?\s*-?\d[\d,]*(?:\.\d{1,2})?\)?\s*(?:cr|dr)?$/i.test(value.trim());
+}
+
+function tableHeaderSignature(table: string[][]): string | undefined {
+  const header = findHeader(table);
+  if (!header) return undefined;
+  return (table[header.index] ?? [])
+    .map((cell) => normalizeHeader(cell))
+    .filter(Boolean)
+    .join('|');
+}
+
+/**
+ * Join a row that was split by a page break onto the previous row. Docling
+ * sometimes ends a page with the date/narration and starts the next page with
+ * only the amount and balance cells.
+ */
+function mergeContinuationRows(rows: string[][]): string[][] {
+  const merged: string[][] = [];
+  for (const row of rows) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push([...row]);
+      continue;
+    }
+    // Never absorb an opening/closing summary row into the last transaction.
+    if (row.some(isBalanceForwardDescription)) {
+      merged.push([...row]);
+      continue;
+    }
+    const rowHasDate = row.some((cell) => parseStatementDate(cell) !== undefined);
+    const previousHasDate = previous.some((cell) => parseStatementDate(cell) !== undefined);
+    const rowHasAmount = row.some(looksLikeAmountCell);
+    const previousHasAmount = previous.some(looksLikeAmountCell);
+    const shouldJoin = (!rowHasDate && previousHasDate) || (rowHasAmount && !previousHasAmount);
+    if (!shouldJoin) {
+      merged.push([...row]);
+      continue;
+    }
+    const width = Math.max(previous.length, row.length);
+    for (let index = 0; index < width; index += 1) {
+      const value = (row[index] ?? '').trim();
+      if (!value) continue;
+      const existing = (previous[index] ?? '').trim();
+      previous[index] = existing ? `${existing} ${value}` : value;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Docling emits one Markdown table per detected table/page. Re-join tables
+ * that repeat the same header, or continuation tables with the same column
+ * shape, so a statement that spans pages is parsed as one ledger.
+ */
+function mergeMarkdownTables(tables: string[][][]): string[][][] {
+  const merged: string[][][] = [];
+  let current: string[][] | undefined;
+  let currentSignature: string | undefined;
+  let currentColumns = 0;
+
+  for (const table of tables) {
+    if (table.length === 0) continue;
+    const header = findHeader(table);
+    const signature = tableHeaderSignature(table);
+    if (header && header.index <= 1) {
+      if (current && signature && currentSignature === signature) {
+        current.push(...table.slice(header.index + 1));
+      } else {
+        current = [...table];
+        currentSignature = signature;
+        currentColumns = current[0]?.length ?? 0;
+        merged.push(current);
+      }
+      continue;
+    }
+    const looksTransactional = table.some(
+      (row) =>
+        row.some((cell) => parseStatementDate(cell) !== undefined) ||
+        row.some(looksLikeAmountCell),
+    );
+    const sameShape =
+      current !== undefined &&
+      currentSignature !== undefined &&
+      looksTransactional &&
+      table.every((row) => row.length === currentColumns);
+    if (current && sameShape) {
+      current.push(...table);
+    } else {
+      current = [...table];
+      currentSignature = undefined;
+      currentColumns = current[0]?.length ?? 0;
+      merged.push(current);
+    }
+  }
+
+  return merged.map((table) => {
+    const header = findHeader(table);
+    if (!header) return mergeContinuationRows(table);
+    return [
+      ...table.slice(0, header.index + 1),
+      ...mergeContinuationRows(table.slice(header.index + 1)),
+    ];
+  });
+}
+
 export function parseMarkdownStatement(
   markdown: string,
   options: ParseStatementOptions = {},
@@ -735,7 +836,7 @@ export function parseMarkdownStatement(
   assertTextLimit(markdown, 'Markdown statement');
   const adapter = resolveAdapter(markdown, options);
   const rows: ParsedStatementRow[] = [];
-  for (const table of extractMarkdownTables(markdown)) {
+  for (const table of mergeMarkdownTables(extractMarkdownTables(markdown))) {
     rows.push(...rowsFromTable(table, adapter, options));
     assertRowLimit(rows.length, 'Markdown statement');
   }
@@ -756,330 +857,48 @@ export function parseMarkdownStatement(
   };
 }
 
-interface LayoutLine {
-  page: number;
-  y: number;
-  items: PdfTextItem[];
-  text: string;
-}
-
-interface LayoutPosition {
-  x: number;
-  end: number;
-}
-
-type LayoutRoles = Partial<Record<Role, LayoutPosition>>;
-
-const LAYOUT_AMOUNT_TOKEN =
-  /^(?:₹|inr|rs\.?)?\s*\(?-?\d[\d,]*(?:\.\d{1,2})?\)?\s*(?:cr|dr)?$/i;
-
-function buildLayoutLines(items: PdfTextItem[]): LayoutLine[] {
-  const ordered = [...items].sort((a, b) => a.page - b.page || b.y - a.y || a.x - b.x);
-  const lines: LayoutLine[] = [];
-  let current: LayoutLine | undefined;
-
-  for (const item of ordered) {
-    const tolerance = Math.max(1.5, Math.min(3, (item.height || 8) * 0.45));
-    if (!current || current.page !== item.page || Math.abs(current.y - item.y) > tolerance) {
-      current = { page: item.page, y: item.y, items: [], text: '' };
-      lines.push(current);
-    }
-    current.items.push(item);
-  }
-
-  for (const line of lines) {
-    line.items.sort((a, b) => a.x - b.x);
-    line.text = line.items
-      .map((item) => item.text)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-  return lines;
-}
-
-function roleForHeaderToken(token: string): Role | undefined {
-  for (const [role, aliases] of Object.entries(ROLE_ALIASES) as Array<[Role, string[]]>) {
-    for (const rawAlias of aliases) {
-      const alias = normalizeHeader(rawAlias);
-      if (token === alias || token.startsWith(`${alias} `) || token.endsWith(` ${alias}`)) {
-        return role;
-      }
-    }
-  }
-  return undefined;
-}
-
-function layoutHeaderRoles(line: LayoutLine): LayoutRoles | undefined {
-  const roles: LayoutRoles = {};
-  for (const item of line.items) {
-    for (const match of item.text.matchAll(/\S+/g)) {
-      const token = normalizeHeader(match[0]);
-      if (!token) continue;
-      const role = roleForHeaderToken(token);
-      if (!role || roles[role]) continue;
-      const length = Math.max(1, item.text.length);
-      const start = (match.index ?? 0) / length;
-      const end = ((match.index ?? 0) + match[0].length) / length;
-      roles[role] = { x: item.x + item.width * start, end: item.x + item.width * end };
-    }
-  }
-
-  // A header never carries a transaction date in its leading columns. This
-  // guards against prose lines that happen to contain words like "balance".
-  const dateLimit =
-    roles.description?.x ??
-    Math.min(
-      ...[roles.debit?.x, roles.credit?.x, roles.amount?.x, roles.balance?.x].filter(
-        (value): value is number => value !== undefined,
-      ),
-    );
-  if (
-    Number.isFinite(dateLimit) &&
-    line.items.some((item) => item.x < dateLimit && parseStatementDate(item.text.trim()))
-  ) {
-    return undefined;
-  }
-
-  let score = Object.keys(roles).length;
-  if (!roles.date && !roles.valueDate) score -= 3;
-  if (!roles.description) score -= 1;
-  if (!roles.debit && !roles.credit && !roles.amount) score -= 2;
-  return score >= 3 ? roles : undefined;
-}
-
-function layoutAmountRole(x: number, roles: LayoutRoles): Role | undefined {
-  const useSplitColumns = Boolean(roles.debit || roles.credit);
-  const candidates: Array<{ role: Role; position: LayoutPosition }> = [];
-  if (useSplitColumns) {
-    if (roles.credit) candidates.push({ role: 'credit', position: roles.credit });
-    if (roles.debit) candidates.push({ role: 'debit', position: roles.debit });
-  } else if (roles.amount) {
-    candidates.push({ role: 'amount', position: roles.amount });
-  }
-  if (roles.balance) candidates.push({ role: 'balance', position: roles.balance });
-  if (candidates.length === 0) return undefined;
-
-  candidates.sort((a, b) => a.position.x - b.position.x);
-  let selected = candidates[0]!.role;
-  for (let index = 1; index < candidates.length; index += 1) {
-    const previous = candidates[index - 1]!;
-    const next = candidates[index]!;
-    const boundary = (previous.position.end + next.position.x) / 2;
-    if (x >= boundary) selected = next.role;
-  }
-  return selected;
-}
-
-function layoutLineDate(
-  line: LayoutLine,
-  roles: LayoutRoles,
-): { date: string; item: PdfTextItem; remainder: string } | undefined {
-  const descriptionStart = roles.description?.x;
-  const dateColumn = roles.date?.x ?? roles.valueDate?.x;
-  const leftmost = line.items.reduce((min, item) => Math.min(min, item.x), Number.POSITIVE_INFINITY);
-  // A row date sits in the leading date column, not in a reference or a
-  // summary cell that merely contains a date. When the header position is
-  // known, use it instead of assuming a fixed column width.
-  const dateLimit = dateColumn === undefined ? leftmost + 30 : dateColumn + 24;
-  for (const item of line.items) {
-    if (descriptionStart !== undefined && item.x >= descriptionStart) continue;
-    if (item.x > dateLimit) continue;
-    const text = item.text.trim();
-    const match = matchStatementDate(text);
-    if (match) {
-      return { date: match.date, item, remainder: text.slice(match.length).trim() };
-    }
-  }
-  return undefined;
-}
-
-function isLayoutNoiseLine(text: string): boolean {
-  return (
-    isNoiseLine(text) ||
-    /^\d+\s+of\s+\d+\b/i.test(text) ||
-    /^page\s+\d+\b/i.test(text)
-  );
-}
-
-function isLayoutSectionBreak(text: string): boolean {
-  return /^(?:summary\b|statement of\b|account details\b|account holders?\b|fixed deposits?\b|deposits linked\b|other information\b|nominee\b|please note\b|this is a computer[- ]generated\b)/i.test(
-    text,
-  );
-}
-
-export function parsePositionedStatement(
-  items: PdfTextItem[],
-  options: ParseStatementOptions = {},
-): ParsedStatement {
-  const adapter = resolveAdapter(
-    items
-      .map((item) => item.text)
-      .join(' ')
-      .slice(0, 200_000),
-    options,
-  );
-  const lines = buildLayoutLines(items);
-  const rows: ParsedStatementRow[] = [];
-  let roles: LayoutRoles | undefined;
-  let current: { page: number; date: string; lines: LayoutLine[] } | undefined;
-  let openingBalanceMinor: number | undefined;
-  let closingBalanceMinor: number | undefined;
-
-  const finishBlock = () => {
-    if (!current || !roles) return;
-    const block = current;
-    current = undefined;
-    const amountRoles: Role[] = ['credit', 'debit', 'amount', 'balance'];
-    const amountStart = Math.min(
-      ...amountRoles
-        .map((role) => roles?.[role]?.x)
-        .filter((value): value is number => value !== undefined),
-    );
-    const allItems = block.lines.flatMap((line) => line.items);
-    const byRole: Partial<Record<Role, PdfTextItem[]>> = {};
-    for (const item of allItems) {
-      const text = item.text.trim();
-      if (!LAYOUT_AMOUNT_TOKEN.test(text)) continue;
-      const role = layoutAmountRole(item.x, roles);
-      if (!role) continue;
-      (byRole[role] ??= []).push(item);
-    }
-    const rightmost = (role: Role): PdfTextItem | undefined =>
-      (byRole[role] ?? []).slice().sort((a, b) => b.x - a.x)[0];
-
-    const creditItem = rightmost('credit') ?? rightmost('amount');
-    const debitItem = rightmost('debit');
-    let creditMinor = creditItem ? parseStatementAmount(creditItem.text) ?? 0 : 0;
-    let debitMinor = debitItem ? parseStatementAmount(debitItem.text) ?? 0 : 0;
-
-    if (amountSide(creditItem?.text ?? '') === 'debit' && !debitItem) {
-      debitMinor = creditMinor;
-      creditMinor = 0;
-    }
-    if (amountSide(debitItem?.text ?? '') === 'credit' && !creditItem) {
-      creditMinor = debitMinor;
-      debitMinor = 0;
-    }
-
-    const balanceItem = rightmost('balance');
-    const balanceMinor = balanceItem ? parseStatementAmount(balanceItem.text) : undefined;
-
-    const description = allItems
-      .filter((item) => {
-        const text = item.text.trim();
-        if (amountStart !== Number.POSITIVE_INFINITY && item.x >= amountStart - 1) return false;
-        if (LAYOUT_AMOUNT_TOKEN.test(text)) return false;
-        if (parseStatementDate(text)) return false;
-        return true;
-      })
-      .sort((a, b) => a.page - b.page || b.y - a.y || a.x - b.x)
-      .map((item) => item.text.trim())
-      .filter(Boolean)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    if (!description && !balanceItem) return;
-    const normalizedDescription = description.toLowerCase();
-    const isClosing =
-      /^(?:closing balance|balance c\/f|c\/f|carried forward)\b/i.test(description) ||
-      normalizedDescription.includes('closing balance');
-    const isOpening = !isClosing && isBalanceForwardDescription(description);
-    if (isOpening || isClosing) {
-      if (balanceMinor !== undefined) {
-        if (isOpening && openingBalanceMinor === undefined) openingBalanceMinor = balanceMinor;
-        if (isClosing) closingBalanceMinor = balanceMinor;
-      }
-      return;
-    }
-
-    if (debitMinor === 0 && creditMinor === 0) return;
-    if (amountStart === Number.POSITIVE_INFINITY && !description) return;
-
-    const raw: Record<string, unknown> = { page: block.page, layout: true };
-    const row: ParsedStatementRow = {
-      date: block.date,
-      description: description || 'Statement line',
-      debitMinor,
-      creditMinor,
-      page: block.page,
-      currency: options.currency ?? 'INR',
-      raw,
-    };
-    if (balanceMinor !== undefined) row.balanceMinor = balanceMinor;
-    rows.push(row);
-    assertRowLimit(rows.length, 'PDF statement');
-  };
-
-  for (const line of lines) {
-    const header = layoutHeaderRoles(line);
-    if (header) {
-      finishBlock();
-      roles = header;
-      continue;
-    }
-    if (!roles) continue;
-    const dateHit = layoutLineDate(line, roles);
-    if (dateHit) {
-      finishBlock();
-      // A bank may emit the date and the narration as one text run. Keep the
-      // remainder so the transaction description is not lost.
-      const items = line.items.flatMap((item) => {
-        if (item !== dateHit.item) return [item];
-        return dateHit.remainder ? [{ ...item, text: dateHit.remainder }] : [];
-      });
-      current = {
-        page: line.page,
-        date: dateHit.date,
-        lines: [
-          {
-            ...line,
-            items,
-            text: items
-              .map((item) => item.text)
-              .join(' ')
-              .replace(/\s+/g, ' ')
-              .trim(),
-          },
-        ],
-      };
-      continue;
-    }
-    if (current && (isLayoutSectionBreak(line.text) || line.page !== current.page)) {
-      finishBlock();
-      continue;
-    }
-    if (current && !isLayoutNoiseLine(line.text)) current.lines.push(line);
-  }
-  finishBlock();
-
-  const statement = statementFromRows(rows, adapter, options);
-  if (openingBalanceMinor !== undefined) statement.openingBalanceMinor = openingBalanceMinor;
-  if (closingBalanceMinor !== undefined) statement.closingBalanceMinor = closingBalanceMinor;
-  return statement;
-}
-
 function parseExtractedPdfMarkdown(
   markdown: string,
   options: ParseStatementOptions,
 ): ParsedStatement {
   const adapter = resolveAdapter(markdown, options);
+  let statement: ParsedStatement | undefined;
   if (['nps', 'ppf', 'interest', 'p2p'].includes(adapter.kind)) {
     const specialized = parseSpecializedStatement(markdown, {
       fileName: options.fileName,
       kind: adapter.kind,
     });
-    if (specialized && specialized.rows.length > 0) return specialized;
+    if (specialized && specialized.rows.length > 0) statement = specialized;
   }
-  return parseMarkdownStatement(markdown, options);
+  statement ??= parseMarkdownStatement(markdown, options);
+  const metadata = extractPdfMetadata(markdown);
+  if (metadata) statement.metadata = { ...(statement.metadata ?? {}), ...metadata };
+  return statement;
 }
 
 type BalanceStatus = 'verified' | 'unverifiable' | 'mismatch';
 
-function balanceStatus(statement: ParsedStatement): BalanceStatus {
-  if (statement.rows.length === 0) return 'mismatch';
-  const lines: BalanceLine[] = statement.rows.map((row, index) => ({
+export class StatementReconciliationError extends Error {
+  readonly mismatches: BalanceMismatch[];
+  readonly issues: string[];
+
+  constructor(message: string, options: { mismatches?: BalanceMismatch[]; issues?: string[] } = {}) {
+    super(message);
+    this.name = 'StatementReconciliationError';
+    this.mismatches = options.mismatches ?? [];
+    this.issues = options.issues ?? [];
+  }
+}
+
+interface ReconciliationOutcome {
+  status: BalanceStatus;
+  repaired: number;
+  mismatches: BalanceMismatch[];
+  issues: string[];
+}
+
+function statementLines(statement: ParsedStatement): BalanceLine[] {
+  return statement.rows.map((row, index) => ({
     lineNo: index + 1,
     date: row.date,
     description: row.description,
@@ -1088,22 +907,184 @@ function balanceStatus(statement: ParsedStatement): BalanceStatus {
     balanceMinor: row.balanceMinor,
     page: row.page,
   }));
-  const assertion = verifyStatementBalance(lines, {
+}
+
+/**
+ * Reconcile extracted rows against the statement's own arithmetic before the
+ * rows are allowed to reach the ledger. Obvious extraction mistakes (an amount
+ * on the wrong side, a missing amount, a missing running balance) are repaired
+ * deterministically; anything that still fails is rejected.
+ */
+function reconcileStatement(statement: ParsedStatement): ReconciliationOutcome {
+  let repaired = 0;
+  const issues: string[] = [];
+
+  for (const [index, row] of statement.rows.entries()) {
+    if (!Number.isSafeInteger(row.debitMinor) || !Number.isSafeInteger(row.creditMinor)) {
+      issues.push(`Row ${index + 1} has a non-integer amount`);
+      continue;
+    }
+    if (row.debitMinor < 0) {
+      row.debitMinor = Math.abs(row.debitMinor);
+      repaired += 1;
+    }
+    if (row.creditMinor < 0) {
+      row.creditMinor = Math.abs(row.creditMinor);
+      repaired += 1;
+    }
+    if (row.balanceMinor !== undefined && !Number.isSafeInteger(row.balanceMinor)) {
+      issues.push(`Row ${index + 1} has a non-integer balance`);
+    }
+  }
+
+  // Use the statement's own running balance to repair missing or swapped
+  // debit/credit columns. Statements are normally chronological, but sort by
+  // date (then original line order) so a page break cannot hide a mismatch.
+  const ordered = statement.rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => a.row.date.localeCompare(b.row.date) || a.index - b.index);
+
+  // Seed the running balance from the statement's opening balance. The B/F
+  // row itself is not emitted as a transaction, so without this anchor the
+  // first real row can never be checked or repaired.
+  let previousBalance: number | undefined = statement.openingBalanceMinor;
+  for (const { row } of ordered) {
+    if (row.debitMinor > 0 && row.creditMinor > 0) {
+      // Both sides filled is ambiguous unless the running balance tells us
+      // which one is real. Resolve it below when a balance is available.
+      if (row.balanceMinor === undefined) {
+        issues.push(`Row ${row.date} has both debit and credit amounts`);
+      }
+    }
+
+    if (row.balanceMinor === undefined) {
+      if (previousBalance !== undefined && (row.debitMinor > 0 || row.creditMinor > 0)) {
+        row.balanceMinor = previousBalance + row.creditMinor - row.debitMinor;
+        previousBalance = row.balanceMinor;
+        repaired += 1;
+      }
+      continue;
+    }
+
+    if (previousBalance !== undefined) {
+      const delta = row.balanceMinor - previousBalance;
+      const expectedDebit = delta < 0 ? -delta : 0;
+      const expectedCredit = delta > 0 ? delta : 0;
+      const matches = row.debitMinor === expectedDebit && row.creditMinor === expectedCredit;
+      if (!matches) {
+        const amount = Math.max(row.debitMinor, row.creditMinor);
+        const swapped =
+          expectedDebit !== expectedCredit &&
+          amount === Math.abs(delta) &&
+          ((delta > 0 && row.debitMinor === amount) || (delta < 0 && row.creditMinor === amount));
+        const missing = row.debitMinor === 0 && row.creditMinor === 0;
+        const wrongSide = amount === Math.abs(delta);
+        if (swapped || missing || wrongSide) {
+          row.debitMinor = expectedDebit;
+          row.creditMinor = expectedCredit;
+          repaired += 1;
+        }
+      }
+    }
+    previousBalance = row.balanceMinor;
+  }
+
+  // A row must never carry both sides after repair. If it still does and the
+  // balance did not resolve it, reject rather than guessing.
+  for (const [index, row] of statement.rows.entries()) {
+    if (row.debitMinor > 0 && row.creditMinor > 0) {
+      issues.push(`Row ${index + 1} has both debit and credit amounts`);
+    }
+  }
+
+  const assertion = verifyStatementBalance(statementLines(statement), {
     openingBalanceMinor: statement.openingBalanceMinor,
     closingBalanceMinor: statement.closingBalanceMinor,
   });
-  if (assertion.mismatches.length > 0) return 'mismatch';
-  // Rows without any balance carry no arithmetic evidence, so a "clean"
-  // assertion would be vacuous. Verified extraction needs a real check.
-  return assertion.checked > 0 || assertion.closingDifferenceMinor !== undefined
-    ? 'verified'
-    : 'unverifiable';
+  const status: BalanceStatus =
+    assertion.mismatches.length > 0
+      ? 'mismatch'
+      : assertion.checked > 0 || assertion.closingDifferenceMinor !== undefined
+        ? 'verified'
+        : 'unverifiable';
+
+  return { status, repaired, mismatches: assertion.mismatches, issues };
 }
 
-// Prefer Docling in development so its table output can be validated in
-// `tauri:dev`. Production builds keep native-first extraction.
-const PREFER_DOCLING = import.meta.env.DEV;
+function formatReconciliationError(outcome: ReconciliationOutcome): string {
+  const parts: string[] = [];
+  if (outcome.issues.length > 0) parts.push(outcome.issues.slice(0, 5).join('; '));
+  if (outcome.mismatches.length > 0) {
+    const first = outcome.mismatches[0];
+    const where =
+      first?.kind === 'closing' ? 'closing balance' : `row ${first?.lineNo ?? '?'}`;
+    parts.push(
+      `${outcome.mismatches.length} balance mismatch${outcome.mismatches.length === 1 ? '' : 'es'} (first: ${where} expected ${first?.expectedMinor ?? '?'} actual ${first?.actualMinor ?? '?'})`,
+    );
+  }
+  return `Statement does not reconcile. ${parts.join(' ')}`.trim();
+}
+
 const DEBUG_PDF = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function maskAccountNumber(value: string): { masked: string; tail: string } | undefined {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length < 6) return undefined;
+  return { masked: `••••${digits.slice(-4)}`, tail: digits.slice(-4) };
+}
+
+function extractPdfMetadata(markdown: string): ParsedStatementMetadata | undefined {
+  const metadata: ParsedStatementMetadata = {};
+  const account = identifyUniqueAccount({ text: markdown });
+  if (account) {
+    metadata.accountNumberMasked = account.accountNumberMasked;
+    metadata.accountTail = account.accountTail;
+    metadata.accountCategory = account.category;
+    if (account.institution) metadata.institution = account.institution;
+  }
+
+  const labeledAccount = markdown.match(
+    /(?:account\s*(?:no\.?|number)|a\/c\s*(?:no\.?|number)?)[:\s|]*([Xx*•\d][Xx*•\d\s-]{5,24})/i,
+  )?.[1];
+  if (labeledAccount && !metadata.accountNumberMasked) {
+    const masked = maskAccountNumber(labeledAccount);
+    if (masked) {
+      metadata.accountNumberMasked = masked.masked;
+      metadata.accountTail = masked.tail;
+      metadata.accountCategory = 'bank_account';
+    }
+  }
+
+  const institution = detectInstitution(markdown);
+  if (institution && !metadata.institution) metadata.institution = institution;
+
+  const ifsc = markdown.match(/\b([A-Z]{4}0[A-Z0-9]{6})\b/)?.[1];
+  if (ifsc) metadata.ifsc = ifsc;
+
+  const holder = markdown.match(
+    /(?:account\s*holder(?:\s*name)?|customer\s*name|name\s*of\s*(?:the\s*)?account\s*holder)[:\s|]+([A-Za-z][A-Za-z .'-]{2,80})/i,
+  )?.[1];
+  if (holder) metadata.accountHolder = holder.trim().replace(/\s+/g, ' ');
+
+  const branch = markdown.match(/(?:branch(?:\s*name)?)[:\s|]+([A-Za-z][A-Za-z .'-]{2,60})/i)?.[1];
+  if (branch) metadata.branch = branch.trim().replace(/\s+/g, ' ');
+
+  const period =
+    markdown.match(
+      /(?:statement\s*(?:period|from)|period)[:\s|]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i,
+    ) ??
+    markdown.match(
+      /(?:from)[:\s|]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i,
+    );
+  if (period) {
+    const from = parseStatementDate(period[1]);
+    const to = parseStatementDate(period[2]);
+    if (from) metadata.statementFrom = from;
+    if (to) metadata.statementTo = to;
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
 
 export async function parsePdfStatement(
   bytes: ArrayBuffer | Uint8Array,
@@ -1111,66 +1092,48 @@ export async function parsePdfStatement(
 ): Promise<ParsedStatement> {
   assertByteLimit(bytes, 'PDF');
 
-  let docling: PdfOcrResult | undefined;
-  if (PREFER_DOCLING) {
-    docling = await pdfOcrFromDocling(bytes, options.password);
-    if (docling.markdown) {
-      const parsed = parseExtractedPdfMarkdown(docling.markdown, options);
-      if (DEBUG_PDF) {
-        console.info(
-          `[pdf] Docling: ${parsed.rows.length} rows, balance ${balanceStatus(parsed)}`,
-        );
-      }
-      if (parsed.rows.length > 0) return parsed;
-    } else if (DEBUG_PDF) {
-      console.info(`[pdf] Docling unavailable: ${docling.error ?? docling.code ?? 'no output'}`);
-    }
+  const result = await pdfDoclingFromRust(bytes, options.password, {
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+  });
+  if (result.error || !result.markdown) {
+    throw new ScannedPdfError(
+      result.error
+        ? `PDF extraction failed. Docling${result.code ? ` (${result.code})` : ''}: ${result.error}`
+        : 'PDF extraction failed. Docling returned no Markdown output.',
+    );
   }
 
-  const anydoc = await pdfMarkdownFromRust(bytes, options.password);
-  const anydocParsed = anydoc.markdown ? parseExtractedPdfMarkdown(anydoc.markdown, options) : undefined;
-  const anydocStatus =
-    anydocParsed && anydocParsed.rows.length > 0 ? balanceStatus(anydocParsed) : undefined;
-  if (anydocParsed && anydocStatus === 'verified') return anydocParsed;
-
-  // Borderless statement tables are often flattened by generic Markdown
-  // conversion. Positioned runs preserve the debit/credit/balance columns
-  // without the cost of OCR.
-  const layout = await pdfLayoutFromRust(bytes, options.password);
-  const layoutParsed =
-    Array.isArray(layout.items) && layout.items.length > 0
-      ? parsePositionedStatement(layout.items, options)
-      : undefined;
-  const layoutStatus =
-    layoutParsed && layoutParsed.rows.length > 0 ? balanceStatus(layoutParsed) : undefined;
-  if (layoutParsed && layoutStatus === 'verified') return layoutParsed;
-
-  // A statement with no balance column cannot be proven arithmetically.
-  // Prefer the default converter, then layout geometry, and skip OCR.
-  if (anydocParsed && anydocStatus === 'unverifiable') return anydocParsed;
-  if (layoutParsed && layoutStatus === 'unverifiable') return layoutParsed;
-
-  if (!docling) docling = await pdfOcrFromDocling(bytes, options.password);
-  if (docling.markdown) {
-    const parsed = parseExtractedPdfMarkdown(docling.markdown, options);
-    if (parsed.rows.length > 0) return parsed;
+  const statement = parseExtractedPdfMarkdown(result.markdown, options);
+  // The raw Markdown can contain full account numbers and holder details.
+  // Rows and metadata are sufficient downstream, so never retain it.
+  delete statement.sourceText;
+  if (statement.rows.length === 0) {
+    throw new ScannedPdfError('PDF extraction failed. Docling returned no statement rows.');
   }
 
-  const anydocDetail = anydoc.error
-    ? `anydoc${anydoc.code ? ` (${anydoc.code})` : ''} failed: ${anydoc.error}`
-    : anydocParsed && anydocParsed.rows.length > 0
-      ? 'anydoc extracted rows that failed balance verification'
-      : anydoc.markdown
-        ? 'anydoc extracted no statement rows'
-        : 'anydoc returned no output';
-  const layoutDetail = layout.error
-    ? `layout${layout.code ? ` (${layout.code})` : ''} failed: ${layout.error}`
-    : layoutParsed && layoutParsed.rows.length > 0
-      ? `layout extracted ${layoutParsed.rows.length} rows that failed balance verification`
-      : 'layout extracted no statement rows';
-  throw new ScannedPdfError(
-    docling.error
-      ? `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling failed: ${docling.error}`
-      : `PDF extraction failed. ${anydocDetail}. ${layoutDetail}. Docling returned no statement rows.`,
-  );
+  const outcome = reconcileStatement(statement);
+  const metadata: ParsedStatementMetadata = {
+    ...(statement.metadata ?? {}),
+    extractor: result.mode === 'native' ? 'docling-native' : 'docling-ocr',
+    pageCount: result.page_count,
+    textPages: result.text_pages,
+    ocrPages: result.ocr_pages,
+    ...(outcome.repaired > 0 ? { repairedRows: outcome.repaired } : {}),
+  };
+  statement.metadata = metadata;
+
+  if (DEBUG_PDF) {
+    console.info(
+      `[pdf] Docling ${result.mode}: ${statement.rows.length} rows, ${outcome.status}, ${outcome.repaired} repaired`,
+    );
+  }
+
+  if (outcome.issues.length > 0 || outcome.status === 'mismatch') {
+    throw new StatementReconciliationError(formatReconciliationError(outcome), {
+      mismatches: outcome.mismatches,
+      issues: outcome.issues,
+    });
+  }
+
+  return statement;
 }

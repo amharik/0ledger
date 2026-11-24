@@ -1,4 +1,5 @@
 import { isTauri } from '@tauri-apps/api/core';
+import type { PdfExtractionProgress } from './types';
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
@@ -9,112 +10,73 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export interface PdfMarkdownResult {
-  markdown?: string;
-  code?: string;
-  error?: string;
-}
-
-export async function pdfMarkdownFromRust(
-  bytes: ArrayBuffer | Uint8Array,
-  password?: string,
-): Promise<PdfMarkdownResult> {
-  if (!isTauri()) {
-    return { code: 'desktopRequired', error: 'PDF extraction requires the desktop app.' };
-  }
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    return await invoke<PdfMarkdownResult>('extract_pdf_markdown', {
-      req: {
-        bytes_base64: bytesToBase64(data),
-        ...(password ? { password } : {}),
-      },
-    });
-  } catch (cause) {
-    return { code: 'invoke', error: cause instanceof Error ? cause.message : String(cause) };
-  }
-}
-
-export interface PdfTextItem {
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  page: number;
-}
-
-export interface PdfLayoutResult {
-  items: PdfTextItem[];
+export interface PdfExtractionResult {
+  markdown: string;
   page_count: number;
+  text_pages: number;
+  ocr_pages: number;
+  mode: string;
   code?: string;
   error?: string;
 }
 
-export async function pdfLayoutFromRust(
+export interface PdfExtractionOptions {
+  requestId?: string;
+  onProgress?: (progress: PdfExtractionProgress) => void;
+}
+
+function failed(code: string, error: string): PdfExtractionResult {
+  return {
+    markdown: '',
+    page_count: 0,
+    text_pages: 0,
+    ocr_pages: 0,
+    mode: 'unavailable',
+    code,
+    error,
+  };
+}
+
+/**
+ * Run Docling through the Rust bridge. Docling decides between native text
+ * extraction and OCR based on the PDF's text layer; the Rust side emits
+ * `pdf-extract-progress` events while the CLI is running.
+ */
+export async function pdfDoclingFromRust(
   bytes: ArrayBuffer | Uint8Array,
   password?: string,
-): Promise<PdfLayoutResult> {
+  options: PdfExtractionOptions = {},
+): Promise<PdfExtractionResult> {
   if (!isTauri()) {
-    return {
-      items: [],
-      page_count: 0,
-      code: 'desktopRequired',
-      error: 'PDF layout extraction requires the desktop app.',
-    };
+    return failed('desktopRequired', 'PDF extraction requires the desktop app.');
   }
+
+  const requestId = options.requestId ?? crypto.randomUUID();
+  let unlisten: (() => void) | undefined;
+  if (options.onProgress) {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlisten = await listen<PdfExtractionProgress>('pdf-extract-progress', (event) => {
+        if (event.payload.request_id === requestId) options.onProgress?.(event.payload);
+      });
+    } catch {
+      // Progress is best-effort; extraction still works without the listener.
+    }
+  }
+
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const result = await invoke<PdfLayoutResult>('extract_pdf_layout', {
+    return await invoke<PdfExtractionResult>('extract_pdf_with_docling', {
       req: {
         bytes_base64: bytesToBase64(data),
+        request_id: requestId,
         ...(password ? { password } : {}),
       },
     });
-    return {
-      ...result,
-      items: Array.isArray(result.items) ? result.items : [],
-      page_count: result.page_count ?? 0,
-    };
   } catch (cause) {
-    return {
-      items: [],
-      page_count: 0,
-      code: 'invoke',
-      error: cause instanceof Error ? cause.message : String(cause),
-    };
-  }
-}
-
-export interface PdfOcrResult {
-  markdown?: string;
-  code?: string;
-  error?: string;
-}
-
-export async function pdfOcrFromDocling(
-  bytes: ArrayBuffer | Uint8Array,
-  password?: string,
-): Promise<PdfOcrResult> {
-  if (!isTauri()) {
-    return { code: 'desktopRequired', error: 'Docling extraction requires the desktop app.' };
-  }
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const markdown = await invoke<string>('ocr_pdf_with_docling', {
-      req: {
-        bytes_base64: bytesToBase64(data),
-        ...(password ? { password } : {}),
-      },
-    });
-    return { markdown };
-  } catch (cause) {
-    return {
-      code: 'invoke',
-      error: cause instanceof Error ? cause.message : String(cause),
-    };
+    return failed('invoke', cause instanceof Error ? cause.message : String(cause));
+  } finally {
+    unlisten?.();
   }
 }

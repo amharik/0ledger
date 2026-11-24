@@ -53,9 +53,11 @@ checked in tests with `validateAdapterRegistry()`.
 
 ## Scanned PDFs
 
-PDFs without a text layer are rejected with `ScannedPdfError` and `requiresOcr = true`.
-`OCR_ENABLED` is currently `false`; there is no OCR engine bundled. Do not silently guess from an
-image-only statement. Add OCR behind an explicit feature flag and keep the original file local.
+PDF extraction always goes through the external Docling CLI. Rust inspects the text layer first:
+pages with selectable text are extracted natively with `--no-ocr`, while scanned pages or broken
+text layers are OCR'd with `--ocr-mode layout_regions --replace-broken`. When Docling is missing,
+the PDF cannot be decrypted, or no rows can be reconciled, the import fails with `ScannedPdfError`
+instead of guessing. Keep the original file local.
 
 ## Fixture policy
 

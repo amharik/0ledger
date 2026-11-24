@@ -25,8 +25,13 @@ import {
 } from './limits';
 import { parseCsvStatement, parsePdfStatement, parseTextStatement, parseXlsxStatement } from './parsers';
 import { parseEmailStatements } from './email';
-import { resolveLedgerForAccount } from './accounts';
-import type { IngestFileInput, ParsedStatement, ParsedStatementRow } from './types';
+import { resolveLedgerForAccount, type AccountCategory } from './accounts';
+import type {
+  IngestFileInput,
+  ParsedStatement,
+  ParsedStatementRow,
+  PdfExtractionProgress,
+} from './types';
 export { verifyStatementBalance, type BalanceAssertion, type BalanceMismatch } from './balance';
 
 export interface StageImportInput {
@@ -85,12 +90,25 @@ export async function stageImport(
 
   let accountId = input.accountId;
   if (!accountId) {
+    const metadata = input.statement.metadata;
+    if (metadata?.accountNumberMasked) {
+      const resolved = await resolveLedgerForAccount(db, input.workspaceId, {
+        accountNumberMasked: metadata.accountNumberMasked,
+        accountTail: metadata.accountTail ?? '',
+        category: (metadata.accountCategory as AccountCategory | undefined) ?? 'bank_account',
+        institution: metadata.institution,
+        rawToken: metadata.accountNumberMasked,
+      });
+      if (resolved) accountId = resolved;
+    }
+  }
+  if (!accountId) {
     const rawAccount = input.statement.rows.find((r) => r.raw?.account)?.raw;
     if (rawAccount && typeof rawAccount.account === 'string') {
       const resolved = await resolveLedgerForAccount(db, input.workspaceId, {
         accountNumberMasked: String(rawAccount.account),
         accountTail: String(rawAccount.accountTail ?? ''),
-        category: (rawAccount.accountCategory as any) ?? 'bank_account',
+        category: (rawAccount.accountCategory as AccountCategory | undefined) ?? 'bank_account',
         institution: rawAccount.institution as string | undefined,
         rawToken: String(rawAccount.account),
       });
@@ -153,6 +171,13 @@ export async function stageImport(
       totalLines: lines.length,
       openingBalanceMinor: input.statement.openingBalanceMinor,
       closingBalanceMinor: input.statement.closingBalanceMinor,
+      accountNumberMasked: input.statement.metadata?.accountNumberMasked,
+      accountTail: input.statement.metadata?.accountTail,
+      bankName: input.statement.metadata?.institution,
+      accountHolder: input.statement.metadata?.accountHolder,
+      ifsc: input.statement.metadata?.ifsc,
+      statementFrom: input.statement.metadata?.statementFrom,
+      statementTo: input.statement.metadata?.statementTo,
       committedLines: 0,
       failedLines: 0,
       createdAt: now,
@@ -173,7 +198,11 @@ export async function ingestFile(
   db: LedgerDatabase,
   workspaceId: string,
   input: IngestFileInput,
-  options: { accountId?: string; password?: string } = {},
+  options: {
+    accountId?: string;
+    password?: string;
+    onProgress?: (progress: PdfExtractionProgress) => void;
+  } = {},
 ): Promise<StageImportResult[]> {
   const fileName = input.fileName;
   const lower = fileName.toLowerCase();
@@ -240,6 +269,7 @@ export async function ingestFile(
       await parsePdfStatement(input.bytes, {
         fileName,
         ...(password ? { password } : {}),
+        ...(options.onProgress ? { onProgress: options.onProgress } : {}),
       }),
     );
   } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {

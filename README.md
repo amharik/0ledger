@@ -62,7 +62,7 @@ Email / PDF / CSV / XLSX
 - **UI & Runtime**: React + TypeScript, Vite, Tauri v2 desktop; Kotlin/Compose and SwiftUI mobile shells.
 - **Storage**: SQLite via `zeroledger-storage` (WAL, migrations, audit chain, change log). Dexie/IndexedDB is a write-through cache for screens that have not moved to the native store yet; desktop reports read SQLite when it is available.
 - **Sync**: UI-agnostic, transport-agnostic change envelopes with last-writer-wins conflict resolution.
-- **Parsing**: native Rust PDF text/layout extraction, Docling OCR, PapaParse, ExcelJS, postal-mime.
+- **Parsing**: Docling PDF extraction (native text/tables first, OCR only for scanned or broken pages), PapaParse, ExcelJS, postal-mime.
 - **No remote code**; the optional API server runs locally and can be locked down with tenant tokens and TLS.
 
 ## Development
@@ -87,21 +87,31 @@ recommended package manager because `bun.lock` is authoritative.
 
 ### PDF extraction and Docling
 
-Development builds (`tauri:dev`) try Docling first so its table output can be
-inspected; production builds keep the native extractors first. Docling is an
-external CLI and is not bundled:
+Docling is the only PDF extractor. Rust inspects the PDF's text layer first and
+then tells Docling to:
+
+- use native text and table structure with `--no-ocr` when every page has
+  selectable text, or
+- run OCR only on image/broken regions with `--ocr-mode layout_regions
+  --replace-broken` when pages are scanned or the text layer is broken.
+
+Tables are extracted in `accurate` mode, images become placeholders, and
+page-spanning tables are stitched back together before parsing. Every row is
+then reconciled against the statement's own running balance; rows that cannot
+be proven are rejected instead of being posted.
+
+Docling is an external CLI and is not bundled:
 
 ```bash
 docling --version                              # confirm the CLI is installed
 pip install --upgrade docling                  # or: uv tool install docling
 docling convert tests/fixtures/bank-table.pdf --from pdf --to md \
-  --output /tmp/opencode/docling-out --ocr      # standalone smoke test
+  --output /tmp/opencode/docling-out --no-ocr   # standalone smoke test
 ```
 
-Import a PDF in `tauri:dev` and watch the terminal for the
-`[pdf] Docling: N rows, balance verified|unverifiable|mismatch` line. If Docling
-is missing, the log shows why and extraction falls back to anydoc and the
-positioned-text extractor.
+Import a PDF in the app to see live extraction progress in the import panel.
+If Docling is missing or the PDF cannot be decrypted, the import fails with a
+clear error instead of silently guessing.
 
 ### Server port and host
 
@@ -215,7 +225,7 @@ validation and numbering path; re-imports are deduplicated.
 - Mailbox passwords and optional statement-PDF passwords are stored in the OS keyring on desktop or in memory for the browser session; they are never written to IndexedDB or `localStorage`. Protected PDFs try the saved statement password and generated candidates at parse time.
 - Emails that produce transactions are archived with their attachments. Desktop stores `.eml` and attachment files in the local vault and keeps paths in IndexedDB; browser mode keeps the bytes in the local IndexedDB database. Source-email previews are available from Money Inbox and ledger records.
 - Google Sheets mirror is plaintext in your Drive by design; local data and backups can be encrypted.
-- Scanned PDFs without a text layer are flagged as requiring OCR; this build does not bundle OCR.
+- Scanned PDF pages are OCR'd locally by the external Docling CLI; no OCR engine is bundled with 0ledger.
 
 See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md) for details.
 

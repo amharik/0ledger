@@ -56,7 +56,7 @@ describe('statement parsing', () => {
     });
   });
 
-  it('parses Rust anydoc Markdown tables with Out/In columns and skips B/F', () => {
+  it('parses Docling Markdown tables with Out/In columns and skips B/F', () => {
     const markdown = `# HDFC Bank Statement
 
 | Date | Description | Out | In | Balance | Status |
@@ -83,7 +83,7 @@ describe('statement parsing', () => {
     });
   });
 
-  it('parses anydoc plain-text output with inline date rows', () => {
+  it('parses Docling plain-text output with inline date rows', () => {
     const markdown =
       'HDFC Bank Statement Date Description Out In Balance Status ' +
       '2026-10-01 B/F 12,345.67 Success ' +

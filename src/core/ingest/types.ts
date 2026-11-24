@@ -22,6 +22,32 @@ export interface ParsedStatementRow {
   raw: Record<string, unknown>;
 }
 
+export type StatementExtractor = 'docling-native' | 'docling-ocr' | 'text' | 'csv' | 'xlsx' | 'email';
+
+export interface ParsedStatementMetadata {
+  accountNumberMasked?: string;
+  accountTail?: string;
+  accountCategory?:
+    | 'bank_account'
+    | 'credit_card'
+    | 'wallet'
+    | 'loan'
+    | 'investment'
+    | 'shopping'
+    | 'gift_card';
+  institution?: string;
+  accountHolder?: string;
+  ifsc?: string;
+  branch?: string;
+  statementFrom?: string;
+  statementTo?: string;
+  pageCount?: number;
+  textPages?: number;
+  ocrPages?: number;
+  extractor?: StatementExtractor;
+  repairedRows?: number;
+}
+
 export interface ParsedStatement {
   adapterId: string;
   adapterName: string;
@@ -31,6 +57,16 @@ export interface ParsedStatement {
   openingBalanceMinor?: number;
   closingBalanceMinor?: number;
   sourceText?: string;
+  metadata?: ParsedStatementMetadata;
+}
+
+export interface PdfExtractionProgress {
+  request_id: string;
+  stage: string;
+  current: number;
+  total: number;
+  percent: number;
+  message: string;
 }
 
 export interface StatementAdapter {
@@ -45,6 +81,7 @@ export interface ParseStatementOptions {
   adapterId?: string;
   fileName?: string;
   currency?: string;
+  onProgress?: (progress: PdfExtractionProgress) => void;
 }
 
 export interface IngestFileInput {

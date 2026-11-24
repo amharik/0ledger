@@ -14,6 +14,7 @@ import {
   type StageImportResult,
 } from '@/core/ingest';
 import { parseTextStatement } from '@/core/ingest/parsers';
+import type { PdfExtractionProgress } from '@/core/ingest/types';
 import { MAX_INGEST_BYTES } from '@/core/ingest/limits';
 import { captureStatementLines } from '@/core/autopilot';
 import { formatMinor } from '@/core/money/money';
@@ -54,6 +55,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
   const [text, setText] = useState('');
   const [showPaste, setShowPaste] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState<PdfExtractionProgress>();
   const [error, setError] = useState<string>();
   const [results, setResults] = useState<StageImportResult[]>([]);
   const [batches, setBatches] = useState<ImportBatch[]>([]);
@@ -118,10 +120,22 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
     if (!file) return;
     setBusy(true);
     setError(undefined);
+    setPdfProgress(undefined);
     if (file.size > MAX_INGEST_BYTES) {
       setError('File exceeds the 25 MB limit.');
       setBusy(false);
       return;
+    }
+    const isPdf = file.name.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      setPdfProgress({
+        request_id: 'pending',
+        stage: 'starting',
+        current: 0,
+        total: 100,
+        percent: 1,
+        message: 'Preparing PDF…',
+      });
     }
     try {
       const bytes = await file.arrayBuffer();
@@ -134,13 +148,17 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
           bytes,
           ...(password ? { password } : {}),
         },
-        { ...(accountId ? { accountId } : {}) },
+        {
+          ...(accountId ? { accountId } : {}),
+          ...(isPdf ? { onProgress: setPdfProgress } : {}),
+        },
       );
       accept(staged);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
       setBusy(false);
+      setPdfProgress(undefined);
     }
   }
 
@@ -323,7 +341,7 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
         <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-6 py-8 text-center transition-colors hover:border-blue-500 hover:bg-blue-50/30 dark:border-slate-700 dark:bg-slate-950/60 dark:hover:border-blue-500">
           <Upload className="h-5 w-5 text-slate-400" />
           <span className="mt-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-            {busy ? 'Reading statement…' : 'Choose statement file to stage'}
+            {busy ? (pdfProgress?.message ?? 'Reading statement…') : 'Choose statement file to stage'}
           </span>
           <span className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Supports HDFC, ICICI, SBI, Axis, Kotak, FASTag CSV/XLSX/PDF, and .eml files up to 25 MB
@@ -340,6 +358,28 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
             }}
           />
         </label>
+
+        {pdfProgress ? (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="font-medium text-slate-700 dark:text-slate-300">
+                {pdfProgress.message}
+              </span>
+              <span className="num-tabular text-slate-500 dark:text-slate-400">
+                {pdfProgress.percent}%
+              </span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all duration-300 dark:bg-blue-500"
+                style={{ width: `${Math.max(2, pdfProgress.percent)}%` }}
+              />
+            </div>
+            <p className="mt-1 text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
+              {pdfProgress.stage}
+            </p>
+          </div>
+        ) : null}
 
         {showPaste ? (
           <div className="mt-4 space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
@@ -377,10 +417,24 @@ export function StatementImport({ workspaceId, ledgers, refreshToken, onChanged 
                 {activeBatch.fileName ?? 'Pasted statement'}
               </h3>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                {activeBatch.adapterId ?? 'generic'} ·{' '}
+                {activeBatch.bankName ?? activeBatch.adapterId ?? 'generic'}
+                {activeBatch.accountNumberMasked
+                  ? ` · A/C ${activeBatch.accountNumberMasked}`
+                  : ''}
+                {activeBatch.statementFrom || activeBatch.statementTo
+                  ? ` · ${activeBatch.statementFrom ?? '…'} to ${activeBatch.statementTo ?? '…'}`
+                  : ''}
+                {' · '}
                 <span className="num-tabular">{activeBatch.totalLines}</span> lines ·{' '}
                 {activeBatch.status}
               </p>
+              {activeBatch.accountHolder || activeBatch.ifsc ? (
+                <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                  {activeBatch.accountHolder ?? ''}
+                  {activeBatch.accountHolder && activeBatch.ifsc ? ' · ' : ''}
+                  {activeBatch.ifsc ? `IFSC ${activeBatch.ifsc}` : ''}
+                </p>
+              ) : null}
             </div>
 
             {balanceCheck && (balanceCheck.checked > 0 || balanceCheck.expectedClosingMinor !== undefined) ? (
