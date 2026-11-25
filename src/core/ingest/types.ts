@@ -101,3 +101,116 @@ export interface IngestFileInput {
   text?: string;
   password?: string;
 }
+
+export type IngestBatchState =
+  | 'RECEIVED'
+  | 'QUEUED'
+  | 'EXTRACTING'
+  | 'FINGERPRINTING'
+  | 'AUTO_MAPPED'
+  | 'NEEDS_MAPPING'
+  | 'SCRUTINY_REQUIRED'
+  | 'RECONCILED'
+  | 'COMMITTED'
+  | 'ABORTED';
+
+export type ColumnRole =
+  | 'date'
+  | 'valueDate'
+  | 'description'
+  | 'debit'
+  | 'credit'
+  | 'amount'
+  | 'type'
+  | 'balance'
+  | 'reference'
+  | 'ignore';
+
+export interface ExtractedTableDto {
+  tableIndex: number;
+  rawHeaders: string[];
+  rawRows: string[][];
+}
+
+export interface IngestBatchDto {
+  idKey: string;
+  workspaceId: string;
+  bankAccountId?: string;
+  sourceType: string;
+  sourceReference?: string;
+  contentSha256: string;
+  senderAddress?: string;
+  state: IngestBatchState;
+  statementKind: string;
+  institutionSlug?: string;
+  accountTail?: string;
+  totalRows: number;
+  reconciledRows: number;
+  skippedDuplicateCount: number;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StatementTemplateDto {
+  idKey: string;
+  workspaceId: string;
+  institutionSlug: string;
+  statementKind: string;
+  headerFingerprint: string;
+  columnMappings: Record<string, ColumnRole>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StatementSummaryDto {
+  openingBalanceMinor?: number;
+  closingBalanceMinor?: number;
+  previousBalanceMinor?: number;
+  totalDueMinor?: number;
+  summaryDebitsMinor?: number;
+  summaryCreditsMinor?: number;
+}
+
+export interface ParsedIngestRowDto {
+  rowIndex: number;
+  date: string;
+  valueDate?: string;
+  description: string;
+  reference?: string;
+  debitMinor: number;
+  creditMinor: number;
+  balanceMinor?: number;
+  narrationNorm: string;
+  dailyRank: number;
+}
+
+export interface BalanceDiscrepancyDto {
+  rowIndex?: number;
+  expectedMinor: number;
+  actualMinor: number;
+  deltaMinor: number;
+  message: string;
+}
+
+export interface IngestBatchStatusResponse {
+  batch: IngestBatchDto;
+  tables: ExtractedTableDto[];
+  template?: StatementTemplateDto;
+  discrepancies: BalanceDiscrepancyDto[];
+}
+
+export interface AuditPatchDto {
+  field: string;
+  rawValue: string;
+  repairedValue: number;
+  repairType: string;
+  actor: string;
+  rationale: string;
+}
+
+export interface ForcePostAssertionDto {
+  actor: string;
+  rationale: string;
+  discrepancyMinor: number;
+}

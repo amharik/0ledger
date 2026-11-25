@@ -6,7 +6,7 @@
 
 uniffi::setup_scaffolding!();
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use zeroledger_engine::{
     CompanyProfile, CompanySettings, Ledger, LedgerNature, NewVoucher, Party, PartyType,
     RoundingMode, TallyPrimaryGroup, Voucher, VoucherLine, VoucherSource, VoucherStatus,
@@ -566,33 +566,32 @@ pub fn open_envelope(key: String, envelope_json: String) -> Result<String, FfiEr
 
 #[derive(uniffi::Object)]
 pub struct FfiStore {
-    inner: Mutex<Store>,
+    inner: Store,
+    rt: tokio::runtime::Runtime,
 }
 
 #[uniffi::export]
 impl FfiStore {
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, FfiError> {
-        let store = Store::open(path).map_err(fail)?;
-        Ok(Arc::new(Self {
-            inner: Mutex::new(store),
-        }))
+        let rt = tokio::runtime::Runtime::new().map_err(fail)?;
+        let store = rt.block_on(Store::open(path)).map_err(fail)?;
+        Ok(Arc::new(Self { inner: store, rt }))
     }
 
     #[uniffi::constructor]
     pub fn open_in_memory() -> Result<Arc<Self>, FfiError> {
-        let store = Store::open_in_memory().map_err(fail)?;
-        Ok(Arc::new(Self {
-            inner: Mutex::new(store),
-        }))
+        let rt = tokio::runtime::Runtime::new().map_err(fail)?;
+        let store = rt.block_on(Store::open_in_memory()).map_err(fail)?;
+        Ok(Arc::new(Self { inner: store, rt }))
     }
 
     pub fn device_id(&self) -> Result<String, FfiError> {
-        Ok(self.lock()?.device_id().to_string())
+        Ok(self.inner.device_id().to_string())
     }
 
     pub fn schema_version(&self) -> Result<u32, FfiError> {
-        self.lock()?.schema_version().map_err(fail)
+        self.rt.block_on(self.inner.schema_version()).map_err(fail)
     }
 
     pub fn create_workspace(
@@ -600,41 +599,57 @@ impl FfiStore {
         workspace: FfiWorkspace,
         company: FfiCompany,
     ) -> Result<(), FfiError> {
-        self.lock()?
-            .create_workspace(&to_workspace(&workspace), &to_company(&company))
+        self.rt
+            .block_on(
+                self.inner
+                    .create_workspace(&to_workspace(&workspace), &to_company(&company)),
+            )
             .map_err(fail)
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<FfiWorkspace>, FfiError> {
-        let workspaces = self.lock()?.list_workspaces().map_err(fail)?;
+        let workspaces = self
+            .rt
+            .block_on(self.inner.list_workspaces())
+            .map_err(fail)?;
         Ok(workspaces.iter().map(from_workspace).collect())
     }
 
     pub fn get_company(&self, workspace_id: String) -> Result<Option<FfiCompany>, FfiError> {
         Ok(self
-            .lock()?
-            .get_company(&workspace_id)
+            .rt
+            .block_on(self.inner.get_company(&workspace_id))
             .map_err(fail)?
             .map(|company| from_company(&company)))
     }
 
     pub fn upsert_ledger(&self, ledger: FfiLedger) -> Result<(), FfiError> {
         let ledger = to_ledger(&ledger)?;
-        self.lock()?.upsert_ledger(&ledger).map_err(fail)
+        self.rt
+            .block_on(self.inner.upsert_ledger(&ledger))
+            .map_err(fail)
     }
 
     pub fn list_ledgers(&self, workspace_id: String) -> Result<Vec<FfiLedger>, FfiError> {
-        let ledgers = self.lock()?.list_ledgers(&workspace_id).map_err(fail)?;
+        let ledgers = self
+            .rt
+            .block_on(self.inner.list_ledgers(&workspace_id))
+            .map_err(fail)?;
         Ok(ledgers.iter().map(from_ledger).collect())
     }
 
     pub fn upsert_party(&self, party: FfiParty) -> Result<(), FfiError> {
         let party = to_party(&party)?;
-        self.lock()?.upsert_party(&party).map_err(fail)
+        self.rt
+            .block_on(self.inner.upsert_party(&party))
+            .map_err(fail)
     }
 
     pub fn list_parties(&self, workspace_id: String) -> Result<Vec<FfiParty>, FfiError> {
-        let parties = self.lock()?.list_parties(&workspace_id).map_err(fail)?;
+        let parties = self
+            .rt
+            .block_on(self.inner.list_parties(&workspace_id))
+            .map_err(fail)?;
         Ok(parties.iter().map(from_party).collect())
     }
 
@@ -647,16 +662,24 @@ impl FfiStore {
             voucher: to_voucher(&voucher)?,
             lines: lines.iter().map(to_line).collect(),
         };
-        self.lock()?.post_voucher(&input).map_err(fail)
+        self.rt
+            .block_on(self.inner.post_voucher(&input))
+            .map_err(fail)
     }
 
     pub fn list_vouchers(&self, workspace_id: String) -> Result<Vec<FfiVoucher>, FfiError> {
-        let vouchers = self.lock()?.list_vouchers(&workspace_id).map_err(fail)?;
+        let vouchers = self
+            .rt
+            .block_on(self.inner.list_vouchers(&workspace_id))
+            .map_err(fail)?;
         Ok(vouchers.iter().map(from_voucher).collect())
     }
 
     pub fn get_voucher(&self, voucher_id: String) -> Result<Option<FfiVoucherBundle>, FfiError> {
-        let found = self.lock()?.get_voucher(&voucher_id).map_err(fail)?;
+        let found = self
+            .rt
+            .block_on(self.inner.get_voucher(&voucher_id))
+            .map_err(fail)?;
         Ok(found.map(|(voucher, lines)| FfiVoucherBundle {
             voucher: from_voucher(&voucher),
             lines: lines.iter().map(from_line).collect(),
@@ -664,17 +687,26 @@ impl FfiStore {
     }
 
     pub fn trial_balance(&self, workspace_id: String) -> Result<FfiTrialBalance, FfiError> {
-        let tb = self.lock()?.trial_balance(&workspace_id).map_err(fail)?;
+        let tb = self
+            .rt
+            .block_on(self.inner.trial_balance(&workspace_id))
+            .map_err(fail)?;
         Ok(from_trial_balance(&tb))
     }
 
     pub fn profit_and_loss(&self, workspace_id: String) -> Result<FfiPnl, FfiError> {
-        let pnl = self.lock()?.profit_and_loss(&workspace_id).map_err(fail)?;
+        let pnl = self
+            .rt
+            .block_on(self.inner.profit_and_loss(&workspace_id))
+            .map_err(fail)?;
         Ok(from_pnl(&pnl))
     }
 
     pub fn integrity_check(&self, workspace_id: String) -> Result<FfiIntegrityReport, FfiError> {
-        let report = self.lock()?.integrity_check(&workspace_id).map_err(fail)?;
+        let report = self
+            .rt
+            .block_on(self.inner.integrity_check(&workspace_id))
+            .map_err(fail)?;
         Ok(FfiIntegrityReport {
             ok: report.ok,
             checked_vouchers: report.checked_vouchers,
@@ -694,7 +726,10 @@ impl FfiStore {
     pub fn import_bundle(&self, bundle_json: String) -> Result<FfiImportSummary, FfiError> {
         let bundle: zeroledger_storage::ImportBundle =
             serde_json::from_str(&bundle_json).map_err(fail)?;
-        let summary = self.lock()?.import_bundle(&bundle).map_err(fail)?;
+        let summary = self
+            .rt
+            .block_on(self.inner.import_bundle(&bundle))
+            .map_err(fail)?;
         Ok(FfiImportSummary {
             workspaces: summary.workspaces,
             companies: summary.companies,
@@ -705,7 +740,9 @@ impl FfiStore {
     }
 
     pub fn backup_to(&self, path: String) -> Result<(), FfiError> {
-        self.lock()?.backup_to(path).map_err(fail)
+        self.rt
+            .block_on(self.inner.backup_to(path))
+            .map_err(fail)
     }
 
     pub fn export_sync_envelope(
@@ -714,8 +751,8 @@ impl FfiStore {
         since_lamport: u64,
     ) -> Result<String, FfiError> {
         let key = SyncKey::from_base64(&key).map_err(fail)?;
-        self.lock()?
-            .export_sync_envelope(&key, since_lamport)
+        self.rt
+            .block_on(self.inner.export_sync_envelope(&key, since_lamport))
             .map_err(fail)
     }
 
@@ -726,19 +763,13 @@ impl FfiStore {
     ) -> Result<FfiApplySummary, FfiError> {
         let key = SyncKey::from_base64(&key).map_err(fail)?;
         let summary = self
-            .lock()?
-            .import_sync_envelope(&key, &envelope_json)
+            .rt
+            .block_on(self.inner.import_sync_envelope(&key, &envelope_json))
             .map_err(fail)?;
         Ok(FfiApplySummary {
             applied: summary.applied,
             ignored: summary.ignored,
             skipped: summary.skipped,
         })
-    }
-}
-
-impl FfiStore {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Store>, FfiError> {
-        self.inner.lock().map_err(|_| fail("store lock poisoned"))
     }
 }

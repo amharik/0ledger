@@ -25,3 +25,4 @@ imap = "2.4"
 native-tls = "0.2"
 chrono = "0.4"
 keyring = "4.2.0"
+tokio = { version = "1", features = ["sync"] }

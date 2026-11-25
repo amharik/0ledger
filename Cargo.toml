@@ -21,7 +21,8 @@ serde_json = "1"
 thiserror = "2"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["clock", "serde"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+surrealdb = { version = "2", features = ["kv-surrealkv", "kv-mem"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 chacha20poly1305 = "0.10"
 getrandom = "0.2"
 base64 = "0.22"

@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
-    #[error("sqlite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    #[error("surrealdb error: {0}")]
+    Surreal(#[from] surrealdb::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("engine error: {0}")]

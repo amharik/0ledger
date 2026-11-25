@@ -11,12 +11,14 @@
 //! * financial years are derived from an explicit start month.
 
 pub mod error;
+pub mod ingest;
 pub mod model;
 pub mod money;
 pub mod reports;
 pub mod validation;
 
 pub use error::{EngineError, EngineResult};
+pub use ingest::*;
 pub use model::*;
 pub use money::{
     allocate_minor, format_minor, minor_to_decimal_string, parse_amount_to_minor,

@@ -374,25 +374,129 @@ fn strip_invisible(value: &str) -> String {
         .collect()
 }
 
-fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnlockError> {
-    let supplied = password.unwrap_or("");
+fn build_password_candidates(supplied: Option<&str>) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
-    if !supplied.is_empty() {
-        candidates.push(supplied.to_string());
-        let stripped = strip_invisible(supplied);
-        for value in [supplied.trim(), stripped.as_str(), stripped.trim()] {
-            if !value.is_empty() && !candidates.iter().any(|candidate| candidate.as_str() == value) {
-                candidates.push(value.to_string());
+    let mut push_candidate = |val: &str| {
+        if !val.is_empty()
+            && !val.contains('\0')
+            && !candidates.iter().any(|candidate| candidate.as_str() == val)
+        {
+            candidates.push(val.to_string());
+        }
+    };
+
+    if let Some(pwd) = supplied {
+        let raw = pwd;
+        let stripped = strip_invisible(raw);
+        let trimmed = raw.trim();
+        let stripped_trimmed = stripped.trim();
+
+        // 1. Exact & stripped/trimmed forms
+        push_candidate(raw);
+        push_candidate(trimmed);
+        push_candidate(stripped.as_str());
+        push_candidate(stripped_trimmed);
+
+        // 2. Case variations (common for PAN or uppercase banking credentials)
+        if !stripped_trimmed.is_empty() {
+            push_candidate(&stripped_trimmed.to_uppercase());
+            push_candidate(&stripped_trimmed.to_lowercase());
+
+            // 3. Delimiter variations (e.g. DOB: 01-01-1990, 01/01/1990, 01.01.1990 -> 01011990)
+            let without_delims: String = stripped_trimmed
+                .chars()
+                .filter(|c| !matches!(c, ' ' | '-' | '/' | '.' | '_'))
+                .collect();
+            if without_delims != stripped_trimmed {
+                push_candidate(&without_delims);
+                push_candidate(&without_delims.to_uppercase());
+                push_candidate(&without_delims.to_lowercase());
             }
         }
     }
-    // Empty user password: a statement can be owner-password-only while the
+
+    // 4. Empty user password: a statement can be owner-password-only while the
     // bank still advertises a password, and pasted passwords often carry
     // stray whitespace. Try the safe candidates before rejecting the input.
-    candidates.push(String::new());
+    if !candidates.iter().any(|candidate| candidate.is_empty()) {
+        candidates.push(String::new());
+    }
+
+    candidates
+}
+
+struct TempFileGuard(PathBuf);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Fallback decryption via qpdf CLI.
+/// Many real-world bank statements use indirect /ID trailers, non-standard /Perms
+/// (e.g. Acrobat 9 / ExtensionLevel 3), owner password key derivation quirks,
+/// linearized xrefs, or hybrid xref streams that pure-Rust parsers can choke on.
+/// qpdf canonicalizes and repairs these structures robustly.
+fn try_decrypt_with_qpdf(bytes: &[u8], candidates: &[String]) -> Result<Option<Vec<u8>>, String> {
+    let has_qpdf = std::process::Command::new("qpdf")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+
+    if !has_qpdf {
+        return Ok(None);
+    }
+
+    let temp_name = format!(
+        "0ledger-qpdf-{}-{}.pdf",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let temp_path = std::env::temp_dir().join(temp_name);
+    if let Err(e) = fs::write(&temp_path, bytes) {
+        return Err(format!("Failed to write temporary PDF for qpdf: {}", e));
+    }
+    let _guard = TempFileGuard(temp_path.clone());
+
+    for candidate in candidates {
+        let mut cmd = std::process::Command::new("qpdf");
+        cmd.arg("--warning-exit-0");
+        cmd.arg(format!("--password={}", candidate));
+        cmd.arg("--decrypt");
+        cmd.arg(&temp_path);
+        cmd.arg("-");
+
+        match cmd.output() {
+            Ok(output) => {
+                if output.status.success() && !output.stdout.is_empty() {
+                    let out = output.stdout;
+                    if out.starts_with(b"%PDF-") {
+                        return Ok(Some(out));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(format!("Failed to run qpdf: {}", e));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnlockError> {
+    let supplied = password.unwrap_or("");
+    let candidates = build_password_candidates(password);
 
     let mut structural_error: Option<lopdf::Error> = None;
+    let mut saw_lopdf_invalid_password = false;
     let mut loaded = None;
+
     for candidate in &candidates {
         match lopdf::Document::load_mem_with_options(
             bytes,
@@ -402,7 +506,9 @@ fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnloc
                 loaded = Some(document);
                 break;
             }
-            Err(lopdf::Error::InvalidPassword) => {}
+            Err(lopdf::Error::InvalidPassword) => {
+                saw_lopdf_invalid_password = true;
+            }
             Err(error) => {
                 if structural_error.is_none() {
                     structural_error = Some(error);
@@ -410,46 +516,59 @@ fn decrypt_pdf(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, PdfUnloc
             }
         }
     }
-    let mut document = match loaded {
-        Some(document) => document,
-        None => {
-            if let Some(error) = structural_error {
-                let encrypted = lopdf::Document::load_mem(bytes)
-                    .map(|document| document.is_encrypted())
-                    .unwrap_or(false);
-                if !encrypted {
-                    return Err(PdfUnlockError::Unreadable(error.to_string()));
-                }
-            }
-            return Err(if supplied.is_empty() {
-                PdfUnlockError::PasswordRequired
-            } else {
-                PdfUnlockError::InvalidPassword
-            });
+
+    if let Some(mut document) = loaded {
+        // lopdf successfully decrypted or opened the document
+        if !document.is_encrypted() && !document.was_encrypted() {
+            return Ok(bytes.to_vec());
         }
-    };
-    // The loader removes /Encrypt after a successful decrypt, so is_encrypted
-    // is false for both a plain PDF and a just-decrypted one. was_encrypted
-    // tells them apart: only a plain PDF can be passed through untouched.
-    if !document.is_encrypted() && !document.was_encrypted() {
-        return Ok(bytes.to_vec());
+        // Safety net for files that keep the /Encrypt dictionary around after
+        // decryption; Docling must receive a clean, unencrypted PDF.
+        if let Ok(encrypt_ref) = document
+            .trailer
+            .get(b"Encrypt")
+            .and_then(|object| object.as_reference())
+        {
+            document.objects.remove(&encrypt_ref);
+        }
+        document.trailer.remove(b"Encrypt");
+        document.encryption_state = None;
+        let mut output = Vec::new();
+        document
+            .save_to(&mut output)
+            .map_err(|error| PdfUnlockError::Unreadable(format!("Could not serialize decrypted PDF: {}", error)))?;
+        return Ok(output);
     }
-    // Safety net for files that keep the /Encrypt dictionary around after
-    // decryption; Docling must receive a clean, unencrypted PDF.
-    if let Ok(encrypt_ref) = document
-        .trailer
-        .get(b"Encrypt")
-        .and_then(|object| object.as_reference())
-    {
-        document.objects.remove(&encrypt_ref);
+
+    // lopdf could not decrypt (due to wrong password, or metadata/perms/ID/owner-key bug).
+    // Attempt high-fidelity fallback using qpdf if available.
+    match try_decrypt_with_qpdf(bytes, &candidates) {
+        Ok(Some(decrypted_bytes)) => {
+            return Ok(decrypted_bytes);
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("Warning: qpdf decryption error: {}", err);
+        }
     }
-    document.trailer.remove(b"Encrypt");
-    document.encryption_state = None;
-    let mut output = Vec::new();
-    document
-        .save_to(&mut output)
-        .map_err(|error| PdfUnlockError::Unreadable(format!("Could not serialize decrypted PDF: {}", error)))?;
-    Ok(output)
+
+    // If the file is not an encrypted PDF and lopdf couldn't parse it:
+    if let Some(error) = structural_error {
+        let encrypted = lopdf::Document::load_mem(bytes)
+            .map(|document| document.is_encrypted())
+            .unwrap_or(false);
+        if !encrypted && !saw_lopdf_invalid_password {
+            return Err(PdfUnlockError::Unreadable(error.to_string()));
+        }
+    }
+
+    // If empty candidate "" failed on an encrypted file and no password was supplied,
+    // prompt the user for the password.
+    if supplied.is_empty() {
+        return Err(PdfUnlockError::PasswordRequired);
+    }
+
+    Err(PdfUnlockError::InvalidPassword)
 }
 #[derive(Debug, Clone)]
 struct TextLayerInfo {
@@ -1155,6 +1274,40 @@ mod tests {
         let opened = decrypt_pdf(owner_only, None).expect("owner-only opens");
         let document = lopdf::Document::load_mem(&opened).expect("loads owner-only PDF");
         assert!(!document.is_encrypted());
+
+        // Case-insensitive candidate recovery (e.g. uppercase entered for lowercase password)
+        let decrypted_upper = decrypt_pdf(aes256, Some("0LEDGER-AES")).expect("decrypts uppercase variant");
+        assert!(!lopdf::Document::load_mem(&decrypted_upper).unwrap().is_encrypted());
+
+        // Corrupted/non-PDF files must report Unreadable, not InvalidPassword or PasswordRequired
+        assert!(matches!(
+            decrypt_pdf(b"not a valid pdf header", None),
+            Err(PdfUnlockError::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn test_build_password_candidates() {
+        let candidates = build_password_candidates(Some(" 01-04-1990 "));
+        assert!(candidates.contains(&"01-04-1990".to_string()));
+        assert!(candidates.contains(&"01041990".to_string()));
+        assert!(candidates.contains(&"".to_string()));
+
+        let pan_candidates = build_password_candidates(Some("abcde1234f"));
+        assert!(pan_candidates.contains(&"ABCDE1234F".to_string()));
+        assert!(pan_candidates.contains(&"abcde1234f".to_string()));
+    }
+
+    #[test]
+    fn test_qpdf_fallback() {
+        let aes256 = include_bytes!("../../tests/fixtures/bank-table-aes256.pdf");
+        let candidates = vec!["0ledger-aes".to_string()];
+        let res = try_decrypt_with_qpdf(aes256, &candidates).expect("qpdf execution succeeds");
+        if let Some(decrypted) = res {
+            assert!(decrypted.starts_with(b"%PDF-"));
+            let doc = lopdf::Document::load_mem(&decrypted).expect("decrypted by qpdf is readable");
+            assert!(!doc.is_encrypted());
+        }
     }
 
     #[test]

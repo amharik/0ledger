@@ -159,7 +159,13 @@ fn main() {
             store_backup,
             sync_generate_key,
             sync_export_envelope,
-            sync_import_envelope
+            sync_import_envelope,
+            ingest_pdf_batch,
+            get_ingest_batch_status,
+            confirm_column_mapping,
+            submit_ocr_audit_patch,
+            force_post_batch,
+            export_surreal_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running 0ledger desktop application");

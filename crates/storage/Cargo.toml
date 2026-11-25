@@ -11,7 +11,8 @@ zeroledger-sync = { path = "../sync" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-rusqlite.workspace = true
+surrealdb.workspace = true
+tokio.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 getrandom.workspace = true

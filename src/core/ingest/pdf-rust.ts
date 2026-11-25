@@ -1,5 +1,14 @@
 import { isTauri } from '@tauri-apps/api/core';
-import type { PdfExtractionProgress } from './types';
+import type {
+  AuditPatchDto,
+  ColumnRole,
+  ForcePostAssertionDto,
+  IngestBatchDto,
+  IngestBatchStatusResponse,
+  ParsedIngestRowDto,
+  PdfExtractionProgress,
+  StatementSummaryDto,
+} from './types';
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
@@ -79,4 +88,87 @@ export async function pdfDoclingFromRust(
   } finally {
     unlisten?.();
   }
+}
+
+
+export interface IngestPdfBatchParams {
+  workspaceId: string;
+  bankLedgerId: string;
+  sourceType: 'upload' | 'imap' | 'gmail';
+  sourceReference?: string;
+  senderAddress?: string;
+  statementKind: 'bank' | 'credit_card' | 'p2p' | 'fastag';
+  bytes: ArrayBuffer | Uint8Array;
+  password?: string;
+  summary?: StatementSummaryDto;
+}
+
+export async function ingestPdfBatch(
+  params: IngestPdfBatchParams,
+): Promise<IngestBatchStatusResponse> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const data = params.bytes instanceof Uint8Array ? params.bytes : new Uint8Array(params.bytes);
+  return invoke<IngestBatchStatusResponse>('ingest_pdf_batch', {
+    req: {
+      workspaceId: params.workspaceId,
+      bankLedgerId: params.bankLedgerId,
+      sourceType: params.sourceType,
+      sourceReference: params.sourceReference,
+      senderAddress: params.senderAddress,
+      statementKind: params.statementKind,
+      bytesBase64: bytesToBase64(data),
+      password: params.password,
+      summary: params.summary,
+    },
+  });
+}
+
+export async function getIngestBatchStatus(
+  batchId: string,
+): Promise<IngestBatchStatusResponse | null> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<IngestBatchStatusResponse | null>('get_ingest_batch_status', { batchId });
+}
+
+export async function confirmColumnMapping(params: {
+  workspaceId: string;
+  batchId: string;
+  bankLedgerId: string;
+  institutionSlug: string;
+  statementKind: string;
+  columnMappings: Record<string, ColumnRole>;
+  rows: ParsedIngestRowDto[];
+  summary: StatementSummaryDto;
+}): Promise<IngestBatchStatusResponse> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<IngestBatchStatusResponse>('confirm_column_mapping', { req: params });
+}
+
+export async function submitOcrAuditPatch(params: {
+  workspaceId: string;
+  batchId: string;
+  bankLedgerId: string;
+  statementKind: string;
+  rows: ParsedIngestRowDto[];
+  summary: StatementSummaryDto;
+  patch: AuditPatchDto;
+}): Promise<IngestBatchStatusResponse> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<IngestBatchStatusResponse>('submit_ocr_audit_patch', { req: params });
+}
+
+export async function forcePostBatch(params: {
+  workspaceId: string;
+  batchId: string;
+  bankLedgerId: string;
+  rows: ParsedIngestRowDto[];
+  forcePost: ForcePostAssertionDto;
+}): Promise<IngestBatchDto> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<IngestBatchDto>('force_post_batch', { req: params });
+}
+
+export async function exportSurrealSnapshot(path: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<void>('export_surreal_snapshot', { path });
 }
